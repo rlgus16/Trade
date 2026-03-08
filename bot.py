@@ -1,5 +1,5 @@
 import ccxt
-import google.generativeai as genai
+from google import genai
 import time
 import json
 
@@ -8,7 +8,7 @@ import json
 # ==========================================
 BINANCE_API_KEY = 'YOUR_BINANCE_API_KEY'
 BINANCE_SECRET = 'YOUR_BINANCE_SECRET'
-GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'
+GEMINI_API_KEY = 'AIzaSyCnojY9u_hQp9fKqDQdd1YVL57N88FCc4M'
 
 # Gemini 3.1 Pro 모델 설정
 genai.configure(api_key=GEMINI_API_KEY)
@@ -99,9 +99,13 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     - 최근 15분봉 데이터: {json.dumps(candles)}
     """
     
-    try:
-        response = model.generate_content(prompt)
-        # JSON 포맷 파싱 (마크다운 백틱이 섞여올 경우 제거)
+try:
+        # 신형 방식: client.models.generate_content 사용
+        response = client.models.generate_content(
+            model='gemini-3.1-pro',
+            contents=prompt
+        )
+        
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
         signal_data = json.loads(clean_text)
         return signal_data
