@@ -4,6 +4,21 @@ import time
 import json
 import pandas as pd
 import pandas_ta as ta
+import logging # 💡 새로 추가된 로깅 모듈
+
+# ==========================================
+# 0. 로깅(Logging) 설정 (터미널 & 파일 동시 출력)
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler("trading_bot.log", encoding='utf-8'), # 텍스트 파일로 저장
+        logging.StreamHandler() # 터미널에도 출력
+    ]
+)
+logger = logging.getLogger()
 
 # ==========================================
 # 1. API 키 설정 (본인의 키로 변경하세요)
@@ -35,14 +50,12 @@ LEVERAGE = 5
 def setup_exchange():
     """레버리지 및 마진 모드(교차) 설정"""
     try:
-        # 💡 [추가된 부분] 거래소의 코인별 최소 주문량, 소수점 규격 정보 불러오기
         exchange.load_markets() 
-        
         exchange.set_leverage(LEVERAGE, SYMBOL)
         exchange.set_margin_mode('cross', SYMBOL)
-        print(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진")
+        logger.info(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진")
     except Exception as e:
-        print(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
+        logger.warning(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
 
 def get_account_state():
     """현재 포지션 및 잔고 조회"""
@@ -68,26 +81,19 @@ def get_market_data():
     ticker = exchange.fetch_ticker(SYMBOL)
     current_price = ticker['last']
     
-    # 💡 지표 계산을 위해 넉넉하게 100개의 4시간봉 캔들을 가져옵니다.
     ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=100)
     
-    # pandas DataFrame으로 변환
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     
-    # 💡 pandas-ta를 이용한 기술적 지표 완벽 계산
-    df.ta.rsi(length=14, append=True)           # RSI (14)
-    df.ta.macd(append=True)                     # MACD
-    df.ta.bbands(length=20, std=2, append=True) # 볼린저 밴드 (20, 2)
-    df.ta.sma(length=20, append=True)           # 20일 이동평균선
+    df.ta.rsi(length=14, append=True)           
+    df.ta.macd(append=True)                     
+    df.ta.bbands(length=20, std=2, append=True) 
+    df.ta.sma(length=20, append=True)           
     
-    # 계산 초기 구간의 결측치(NaN)를 0으로 채움
     df.fillna(0, inplace=True)
     
-    # AI 프롬프트에 넣기 위해 가장 최근 3개의 캔들과 지표만 추출 (토큰 절약 및 최신 트렌드 집중)
     recent_data = df.tail(3).to_dict(orient='records')
-    
-    # JSON 직렬화를 위해 timestamp를 문자열로 변환
     for row in recent_data:
         row['timestamp'] = str(row['timestamp'])
         
@@ -96,7 +102,7 @@ def get_market_data():
 # ==========================================
 # 3. Gemini 3.1 Pro 시그널 분석 함수
 # ==========================================
-def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data): # 💡 파라미터 이름 변경
+def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data):
     system_instruction = """
     너는 바이낸스 선물 시장에서 활동하는 최상위 퀀트 트레이더야. 
     다음 [거래 규칙]을 엄격히 지켜서 판단해.
@@ -132,7 +138,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
         signal_data = json.loads(clean_text)
         return signal_data
     except Exception as e:
-        print(f"⚠️ Gemini 분석 오류: {e}")
+        logger.error(f"⚠️ Gemini 분석 오류: {e}")
         return {"action": "HOLD", "amount_usdt": 0, "reasoning": f"Error: {e}"}
 
 # ==========================================
@@ -143,59 +149,50 @@ def run_bot():
     
     while True:
         try:
-            print("\n" + "="*40)
+            logger.info("="*50)
             free_usdt, long_size, long_price, short_size, short_price = get_account_state()
             current_price, recent_data = get_market_data()
             
-            print(f"💰 현재가: {current_price} | Long: {long_size} USDT | Short: {short_size} USDT")
+            logger.info(f"💰 현재가: {current_price} | Long: {long_size} USDT | Short: {short_size} USDT")
             
-            # Gemini에게 시그널 요청
-            print("🧠 Gemini 3.1 Pro 분석 중...")
+            logger.info("🧠 Gemini 3.1 Pro 분석 중...")
             signal = get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data)
             
             action = signal.get('action')
             amount_usdt = float(signal.get('amount_usdt', 0))
             reason = signal.get('reasoning')
             
-            print(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
+            logger.info(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
-            # 💡 [수정된 부분] 1차 주문 수량(LTC) 계산 (소수점 무한대 발생 가능)
-            raw_order_qty = amount_usdt / current_price
+            raw_order_qty = amount_usdt / current_price if current_price > 0 else 0
             
-            # 💡 [핵심 추가 부분] 바이낸스 규격에 맞게 수량 소수점 절사 (Precision 처리)
-            # 만약 amount_usdt가 0이라면 계산할 필요가 없으므로 분기 처리합니다.
             if amount_usdt > 0:
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
             else:
                 order_qty = 0.0
             
-            # 룰 검증 및 주문 실행
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
-                    print(f"🚀 롱 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
-                    # 실제 주문 코드 (안전을 위해 우선 주석 처리해 두었습니다. 테스트 후 주석 해제하세요)
+                    logger.info(f"🚀 롱 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
                     # exchange.create_order(SYMBOL, 'market', 'buy', order_qty, params={'positionSide': 'LONG'})
                 else:
-                    print("⛔ 롱 포지션 한도(2000 USDT) 초과로 진입 불가.")
+                    logger.warning("⛔ 롱 포지션 한도(2000 USDT) 초과로 진입 불가.")
                     
             elif action == "SHORT" and amount_usdt > 0:
                 if short_size + amount_usdt <= long_size:
-                    print(f"📉 숏 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
-                    # 실제 주문 코드
+                    logger.info(f"📉 숏 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
                     # exchange.create_order(SYMBOL, 'market', 'sell', order_qty, params={'positionSide': 'SHORT'})
                 else:
-                    print("⛔ 숏 포지션은 롱 포지션 규모를 초과할 수 없어 진입 불가.")
+                    logger.warning("⛔ 숏 포지션은 롱 포지션 규모를 초과할 수 없어 진입 불가.")
             
             else:
-                print("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
+                logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
 
         except Exception as e:
-            print(f"에러 발생: {e}")
+            logger.error(f"에러 발생: {e}")
             
-        # 5분마다 반복 실행 (원하는 주기로 변경 가능)
         time.sleep(300) 
 
 if __name__ == "__main__":
-    # 봇 실행 시작
     run_bot()
