@@ -246,7 +246,7 @@ def run_bot():
                     if amount_usdt <= 0:
                         logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
                     else:
-                        raw_close_qty = amount_usdt / current_price
+                        raw_close_qty = amount_usdt / long_price
                         actual_close_qty = min(raw_close_qty, long_contracts)
                         
                         close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
@@ -260,7 +260,7 @@ def run_bot():
             # 💡 숏 포지션 수익 실현/청산 (지정가 매수)
             elif action == "CLOSE_SHORT" and amount_usdt > 0:
                 if short_size > 0:
-                    raw_close_qty = amount_usdt / current_price
+                    raw_close_qty = amount_usdt / short_price
                     actual_close_qty = min(raw_close_qty, short_contracts)
                     
                     close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
