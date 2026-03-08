@@ -97,7 +97,7 @@ def get_market_data():
         logger.warning(f"⚠️ 펀딩비 조회 실패: {e}")
         funding_rate = 0.0
     
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=100)
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=200)
     
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -171,6 +171,12 @@ def run_bot():
         try:
             logger.info("="*50)
             
+            try:
+                exchange.cancel_all_orders(SYMBOL)
+                logger.info(f"🧹 {SYMBOL} 미체결 주문 정리 완료")
+            except Exception as e:
+                logger.warning(f"⚠️ 미체결 주문 취소 중 오류 (무시 가능): {e}")
+
             free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl = get_account_state()
             current_price, recent_data, funding_rate = get_market_data()
             
