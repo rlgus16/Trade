@@ -64,7 +64,6 @@ def get_account_state():
     
     positions = exchange.fetch_positions([SYMBOL])
     
-    # 💡 PnL(미실현 손익) 변수 추가
     long_size = 0.0; long_price = 0.0; long_pnl = 0.0
     short_size = 0.0; short_price = 0.0; short_pnl = 0.0
     
@@ -72,11 +71,11 @@ def get_account_state():
         if pos['side'] == 'long':
             long_size = float(pos['notional'])
             long_price = float(pos['entryPrice'])
-            long_pnl = float(pos.get('unrealizedPnl', 0.0)) # 💡 롱 미실현 손익
+            long_pnl = float(pos.get('unrealizedPnl', 0.0))
         elif pos['side'] == 'short':
             short_size = abs(float(pos['notional']))
             short_price = float(pos['entryPrice'])
-            short_pnl = float(pos.get('unrealizedPnl', 0.0)) # 💡 숏 미실현 손익
+            short_pnl = float(pos.get('unrealizedPnl', 0.0))
             
     return free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl
 
@@ -168,7 +167,7 @@ def run_bot():
             current_price, recent_data, funding_rate = get_market_data()
             
             logger.info(f"💰 현재가: {current_price} | Funding: {funding_rate:.4f}%")
-            logger.info(f"📊 LONG: {long_size} USDT (PnL: {long_pnl:.2f}) | SHORT: {short_size} USDT (PnL: {short_pnl:.2f})")
+            logger.info(f"📊 LONG: {long_size} USDT (PnL: {long_pnl:.2f}) | SHORT: {short_size} USDT (PnL: {short_pnl:.2f}) | FREE: {free_usdt:.2f} USDT")
             
             logger.info("🧠 Gemini 3.1 Pro 분석 중...")
             signal = get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate)
@@ -179,6 +178,21 @@ def run_bot():
             
             logger.info(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
+            # 🛡️ 안전장치 1: 바이낸스 최소 주문 금액 (보통 5 USDT) 방어
+            if action in ["LONG", "SHORT"] and amount_usdt > 0:
+                if amount_usdt < 5.0:
+                    logger.warning(f"🛡️ 방어 로직 작동: 주문 금액({amount_usdt} USDT)이 바이낸스 최소 한도(5 USDT) 미만입니다. 관망(HOLD)으로 전환합니다.")
+                    action = "HOLD"
+                    amount_usdt = 0.0
+
+            # 🛡️ 안전장치 2: 가용 증거금 부족 방어
+            if action in ["LONG", "SHORT"] and amount_usdt > 0:
+                required_margin = amount_usdt / LEVERAGE
+                if required_margin > free_usdt:
+                    logger.warning(f"🛡️ 방어 로직 작동: 가용 잔고 부족! (필요 증거금: {required_margin:.2f} USDT > 현재 잔고: {free_usdt:.2f} USDT). 관망(HOLD)으로 전환합니다.")
+                    action = "HOLD"
+                    amount_usdt = 0.0
+            
             raw_order_qty = amount_usdt / current_price if current_price > 0 else 0
             
             if amount_usdt > 0:
@@ -187,6 +201,7 @@ def run_bot():
             else:
                 order_qty = 0.0
             
+            # 실제 주문 실행부
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
                     logger.info(f"🚀 롱 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
@@ -205,7 +220,11 @@ def run_bot():
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
 
         except Exception as e:
-            logger.error(f"에러 발생: {e}")
+            # 🛡️ 안전장치 3: 네트워크/서버 에러 시 무한 루프 폭주 방지 (60초 대기)
+            logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
+            logger.info("🛡️ 방어 로직 작동: 60초 대기 후 재시도합니다...")
+            time.sleep(60)
+            continue # 다음 턴으로 안전하게 넘기기
             
         time.sleep(300) 
 
