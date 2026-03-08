@@ -2,6 +2,8 @@ import ccxt
 from google import genai
 import time
 import json
+import pandas as pd
+import pandas_ta as ta
 
 # ==========================================
 # 1. API 키 설정 (본인의 키로 변경하세요)
@@ -62,29 +64,49 @@ def get_account_state():
     return free_usdt, long_size, long_price, short_size, short_price
 
 def get_market_data():
-    """현재가 및 최근 캔들 데이터 조회"""
+    """현재가 및 최근 캔들을 가져와 기술적 지표를 계산합니다."""
     ticker = exchange.fetch_ticker(SYMBOL)
     current_price = ticker['last']
     
-    # 💡 [수정된 부분] 최근 4시간봉(4h) 5개 가져오기로 변경
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=5)
-    candles = [{"time": exchange.iso8601(c[0]), "open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in ohlcv]
+    # 💡 지표 계산을 위해 넉넉하게 100개의 4시간봉 캔들을 가져옵니다.
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=100)
     
-    return current_price, candles
+    # pandas DataFrame으로 변환
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    
+    # 💡 pandas-ta를 이용한 기술적 지표 완벽 계산
+    df.ta.rsi(length=14, append=True)           # RSI (14)
+    df.ta.macd(append=True)                     # MACD
+    df.ta.bbands(length=20, std=2, append=True) # 볼린저 밴드 (20, 2)
+    df.ta.sma(length=20, append=True)           # 20일 이동평균선
+    
+    # 계산 초기 구간의 결측치(NaN)를 0으로 채움
+    df.fillna(0, inplace=True)
+    
+    # AI 프롬프트에 넣기 위해 가장 최근 3개의 캔들과 지표만 추출 (토큰 절약 및 최신 트렌드 집중)
+    recent_data = df.tail(3).to_dict(orient='records')
+    
+    # JSON 직렬화를 위해 timestamp를 문자열로 변환
+    for row in recent_data:
+        row['timestamp'] = str(row['timestamp'])
+        
+    return current_price, recent_data
 
 # ==========================================
 # 3. Gemini 3.1 Pro 시그널 분석 함수
 # ==========================================
-def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, candles):
+def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data): # 💡 파라미터 이름 변경
     system_instruction = """
-    너는 바이낸스 선물 시장에서 활동하는 퀀트 트레이더야. 
+    너는 바이낸스 선물 시장에서 활동하는 최상위 퀀트 트레이더야. 
     다음 [거래 규칙]을 엄격히 지켜서 판단해.
     1. 어떠한 상황에서도 손실 확정(Stop-Loss)을 하지 마라. (물타기로 대응)
     2. 총 롱 포지션 규모는 2000 USDT를 초과할 수 없다.
     3. 숏 포지션 규모는 현재 보유 중인 롱 포지션 규모를 초과할 수 없다.
+    4. 제공된 기술적 지표(RSI, MACD, 볼린저 밴드, 이동평균선)를 철저히 분석하여 추세와 과매수/과매도 구간을 파악해라.
     
     반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
-    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "이유 설명"}
+    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "기술적 지표에 근거한 구체적인 진입/관망 이유"}
     """
     
     prompt = f"""
@@ -97,7 +119,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     
     [시장 데이터: {SYMBOL}]
     - 현재가: {current_price}
-    - 최근 4시간봉 데이터: {json.dumps(candles)}
+    - 최근 4시간봉 데이터 및 기술적 지표: {json.dumps(recent_data, indent=2)}
     """
     
     try:
@@ -111,7 +133,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
         return signal_data
     except Exception as e:
         print(f"⚠️ Gemini 분석 오류: {e}")
-        return {"action": "HOLD", "amount_usdt": 0, "reasoning": "Error parsing Gemini response"}
+        return {"action": "HOLD", "amount_usdt": 0, "reasoning": f"Error: {e}"}
 
 # ==========================================
 # 4. 메인 거래 실행 로직
@@ -123,13 +145,13 @@ def run_bot():
         try:
             print("\n" + "="*40)
             free_usdt, long_size, long_price, short_size, short_price = get_account_state()
-            current_price, candles = get_market_data()
+            current_price, recent_data = get_market_data()
             
             print(f"💰 현재가: {current_price} | Long: {long_size} USDT | Short: {short_size} USDT")
             
             # Gemini에게 시그널 요청
             print("🧠 Gemini 3.1 Pro 분석 중...")
-            signal = get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, candles)
+            signal = get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data)
             
             action = signal.get('action')
             amount_usdt = float(signal.get('amount_usdt', 0))
