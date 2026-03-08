@@ -68,13 +68,19 @@ def get_account_state():
     short_size = 0.0; short_price = 0.0; short_pnl = 0.0
     
     for pos in positions:
+        # 포지션의 수량(contracts)과 평단가(entryPrice)를 가져옵니다.
+        contracts = float(pos.get('contracts', 0))
+        entry_price = float(pos.get('entryPrice', 0))
+        
         if pos['side'] == 'long':
-            long_size = float(pos['notional'])
-            long_price = float(pos['entryPrice'])
+            # 수량 * 평단가로 계산하여 가격 하락 시에도 진입 원금을 유지합니다.
+            long_size = contracts * entry_price 
+            long_price = entry_price
             long_pnl = float(pos.get('unrealizedPnl', 0.0))
         elif pos['side'] == 'short':
-            short_size = abs(float(pos['notional']))
-            short_price = float(pos['entryPrice'])
+            # 숏 포지션도 동일하게 원금 기준으로 계산합니다.
+            short_size = abs(contracts * entry_price)
+            short_price = entry_price
             short_pnl = float(pos.get('unrealizedPnl', 0.0))
             
     return free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl
