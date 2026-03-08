@@ -144,7 +144,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     
     try:
         response = client.models.generate_content(
-            model='gemini-3.1-pro',
+            model='gemini-3.1-pro-preview',
             contents=prompt
         )
         
@@ -171,7 +171,7 @@ def run_bot():
             logger.info(f"💰 현재가: {current_price} | Funding: {funding_rate:.4f}%")
             logger.info(f"📊 LONG: {long_size} USDT (PnL: {long_pnl:.2f}) | SHORT: {short_size} USDT (PnL: {short_pnl:.2f}) | FREE: {free_usdt:.2f} USDT")
             
-            logger.info("🧠 Gemini 3.1 Pro 분석 중...")
+            logger.info("🧠 Gemini 3.1 Pro-preview 분석 중...")
             signal = get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate)
             
             action = signal.get('action')
