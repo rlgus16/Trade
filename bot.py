@@ -119,9 +119,10 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     1. 어떠한 상황에서도 손실 확정(Stop-Loss)을 하지 마라. (물타기로 대응)
     2. 총 롱 포지션 규모는 2000 USDT를 초과할 수 없다.
     3. 숏 포지션 규모는 현재 보유 중인 롱 포지션 규모를 초과할 수 없다.
-    4. 제공된 기술적 지표(RSI, MACD, 볼린저 밴드, 이동평균선)를 철저히 분석하여 추세와 과매수/과매도 구간을 파악해라.
+    4. 제공된 기술적 지표(RSI, MACD, 볼린저 밴드, 이동평균선)를 철저히 분석하여 추세와 과매수/과매도 구간 파악해라.
     5. 현재 미실현 손익(PnL) 상태와 펀딩비(Funding Rate)를 고려하여, 물타기 타점과 헤징(Hedging) 시점을 영리하게 계산해라.
-    6. 수익 실현이 필요할 경우 CLOSE_LONG 또는 CLOSE_SHORT 액션을 사용하여 보유 중인 포지션을 청산해라.
+    6. [매우 중요] 롱 포지션을 청산(CLOSE_LONG)할 때, 청산 후 남은 롱 포지션의 규모가 숏 포지션의 규모보다 작아지면 절대 안 된다. (숏 포지션의 무한 손실을 방어하기 위한 필수 헤징 유지)
+    7. 수익 실현이 필요할 경우 CLOSE_LONG 또는 CLOSE_SHORT 액션을 사용하여 보유 중인 포지션을 청산해라.
     
     반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
     {"action": "LONG" | "SHORT" | "CLOSE_LONG" | "CLOSE_SHORT" | "HOLD", "amount_usdt": 진입또는청산금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
@@ -224,15 +225,24 @@ def run_bot():
                 else:
                     logger.warning("⛔ 숏 포지션은 롱 포지션 규모 초과 불가.")
             
-            # 💡 롱 포지션 수익 실현/청산 (지정가 매도)
+            # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
             elif action == "CLOSE_LONG" and amount_usdt > 0:
                 if long_size > 0:
-                    close_qty = min(order_qty, long_size / current_price)
-                    close_qty_str = exchange.amount_to_precision(SYMBOL, close_qty)
-                    final_close_qty = float(close_qty_str)
-                    
-                    logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
-                    # exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
+                    # 🛡️ 롱을 팔고 나서 남는 금액이 숏보다 작아지면 안 됨!
+                    if (long_size - amount_usdt) < short_size:
+                        logger.warning(f"🛡️ 헤지 방어 작동: 롱 청산 후 남은 롱이 숏({short_size} USDT)보다 적어집니다! 숏 노출 위험으로 청산 금액을 축소합니다.")
+                        amount_usdt = long_size - short_size 
+                        
+                    if amount_usdt <= 0:
+                        logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
+                    else:
+                        # 안전하게 조절된 금액으로 수량 다시 계산
+                        raw_close_qty = amount_usdt / current_price
+                        close_qty_str = exchange.amount_to_precision(SYMBOL, raw_close_qty)
+                        final_close_qty = float(close_qty_str)
+                        
+                        logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
+                        # exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
                 else:
                     logger.warning("⛔ 보유 중인 롱 포지션이 없어 청산 불가.")
 
