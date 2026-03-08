@@ -195,24 +195,33 @@ def run_bot():
             
             raw_order_qty = amount_usdt / current_price if current_price > 0 else 0
             
+            # 💡 수량 및 지정가(가격) 정밀도 동시 처리
             if amount_usdt > 0:
+                # 1. 수량(Amount) 소수점 절사
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
+                
+                # 2. 지정가 가격(Price) 소수점 절사 (현재가를 지정가로 사용)
+                order_price_str = exchange.price_to_precision(SYMBOL, current_price)
+                order_price = float(order_price_str)
             else:
                 order_qty = 0.0
+                order_price = 0.0
             
-            # 실제 주문 실행부
+            # 실제 주문 실행부 (시장가 -> 지정가 변경)
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
-                    logger.info(f"🚀 롱 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
-                    # exchange.create_order(SYMBOL, 'market', 'buy', order_qty, params={'positionSide': 'LONG'})
+                    logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
+                    # 💡 'market'을 'limit'으로 변경하고 order_price 파라미터 추가
+                    # exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 else:
                     logger.warning("⛔ 롱 포지션 한도(2000 USDT) 초과로 진입 불가.")
                     
             elif action == "SHORT" and amount_usdt > 0:
                 if short_size + amount_usdt <= long_size:
-                    logger.info(f"📉 숏 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
-                    # exchange.create_order(SYMBOL, 'market', 'sell', order_qty, params={'positionSide': 'SHORT'})
+                    logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
+                    # 💡 'market'을 'limit'으로 변경하고 order_price 파라미터 추가
+                    # exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 else:
                     logger.warning("⛔ 숏 포지션은 롱 포지션 규모를 초과할 수 없어 진입 불가.")
             
@@ -220,11 +229,11 @@ def run_bot():
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
 
         except Exception as e:
-            # 🛡️ 안전장치 3: 네트워크/서버 에러 시 무한 루프 폭주 방지 (60초 대기)
+            # 🛡️ 안전장치 3: 네트워크/서버 에러 시 무한 루프 폭주 방지
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
             logger.info("🛡️ 방어 로직 작동: 60초 대기 후 재시도합니다...")
             time.sleep(60)
-            continue # 다음 턴으로 안전하게 넘기기
+            continue 
             
         time.sleep(300) 
 
