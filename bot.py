@@ -121,9 +121,10 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     3. 숏 포지션 규모는 현재 보유 중인 롱 포지션 규모를 초과할 수 없다.
     4. 제공된 기술적 지표(RSI, MACD, 볼린저 밴드, 이동평균선)를 철저히 분석하여 추세와 과매수/과매도 구간을 파악해라.
     5. 현재 미실현 손익(PnL) 상태와 펀딩비(Funding Rate)를 고려하여, 물타기 타점과 헤징(Hedging) 시점을 영리하게 계산해라.
+    6. 수익 실현이 필요할 경우 CLOSE_LONG 또는 CLOSE_SHORT 액션을 사용하여 보유 중인 포지션을 청산해라.
     
     반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
-    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
+    {"action": "LONG" | "SHORT" | "CLOSE_LONG" | "CLOSE_SHORT" | "HOLD", "amount_usdt": 진입또는청산금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
     """
     
     prompt = f"""
@@ -178,18 +179,18 @@ def run_bot():
             
             logger.info(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
-            # 🛡️ 안전장치 1: 바이낸스 최소 주문 금액 (보통 5 USDT) 방어
-            if action in ["LONG", "SHORT"] and amount_usdt > 0:
+            # 🛡️ 안전장치 1: 바이낸스 최소 주문 금액 (5 USDT) 방어 (진입/청산 모두 적용)
+            if action in ["LONG", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"] and amount_usdt > 0:
                 if amount_usdt < 5.0:
-                    logger.warning(f"🛡️ 방어 로직 작동: 주문 금액({amount_usdt} USDT)이 바이낸스 최소 한도(5 USDT) 미만입니다. 관망(HOLD)으로 전환합니다.")
+                    logger.warning(f"🛡️ 방어 로직 작동: 금액({amount_usdt} USDT)이 바이낸스 최소 한도 미만입니다. 관망(HOLD)으로 전환합니다.")
                     action = "HOLD"
                     amount_usdt = 0.0
 
-            # 🛡️ 안전장치 2: 가용 증거금 부족 방어
+            # 🛡️ 안전장치 2: 가용 증거금 부족 방어 (신규 진입인 LONG, SHORT에만 적용)
             if action in ["LONG", "SHORT"] and amount_usdt > 0:
                 required_margin = amount_usdt / LEVERAGE
                 if required_margin > free_usdt:
-                    logger.warning(f"🛡️ 방어 로직 작동: 가용 잔고 부족! (필요 증거금: {required_margin:.2f} USDT > 현재 잔고: {free_usdt:.2f} USDT). 관망(HOLD)으로 전환합니다.")
+                    logger.warning(f"🛡️ 방어 로직 작동: 가용 잔고 부족! (필요: {required_margin:.2f} > 잔고: {free_usdt:.2f}). 관망(HOLD)으로 전환합니다.")
                     action = "HOLD"
                     amount_usdt = 0.0
             
@@ -197,39 +198,60 @@ def run_bot():
             
             # 💡 수량 및 지정가(가격) 정밀도 동시 처리
             if amount_usdt > 0:
-                # 1. 수량(Amount) 소수점 절사
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
                 
-                # 2. 지정가 가격(Price) 소수점 절사 (현재가를 지정가로 사용)
                 order_price_str = exchange.price_to_precision(SYMBOL, current_price)
                 order_price = float(order_price_str)
             else:
                 order_qty = 0.0
                 order_price = 0.0
             
-            # 실제 주문 실행부 (시장가 -> 지정가 변경)
+            # ==========================================
+            # 💡 실제 주문 실행부 (지정가 및 독립 청산 로직 완벽 적용)
+            # ==========================================
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
                     logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    # 💡 'market'을 'limit'으로 변경하고 order_price 파라미터 추가
                     # exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 else:
-                    logger.warning("⛔ 롱 포지션 한도(2000 USDT) 초과로 진입 불가.")
+                    logger.warning("⛔ 롱 포지션 한도 초과로 진입 불가.")
                     
             elif action == "SHORT" and amount_usdt > 0:
                 if short_size + amount_usdt <= long_size:
                     logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    # 💡 'market'을 'limit'으로 변경하고 order_price 파라미터 추가
                     # exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 else:
-                    logger.warning("⛔ 숏 포지션은 롱 포지션 규모를 초과할 수 없어 진입 불가.")
+                    logger.warning("⛔ 숏 포지션은 롱 포지션 규모 초과 불가.")
             
+            # 💡 롱 포지션 수익 실현/청산 (지정가 매도)
+            elif action == "CLOSE_LONG" and amount_usdt > 0:
+                if long_size > 0:
+                    close_qty = min(order_qty, long_size / current_price)
+                    close_qty_str = exchange.amount_to_precision(SYMBOL, close_qty)
+                    final_close_qty = float(close_qty_str)
+                    
+                    logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
+                    # exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
+                else:
+                    logger.warning("⛔ 보유 중인 롱 포지션이 없어 청산 불가.")
+
+            # 💡 숏 포지션 수익 실현/청산 (지정가 매수)
+            elif action == "CLOSE_SHORT" and amount_usdt > 0:
+                if short_size > 0:
+                    close_qty = min(order_qty, short_size / current_price)
+                    close_qty_str = exchange.amount_to_precision(SYMBOL, close_qty)
+                    final_close_qty = float(close_qty_str)
+                    
+                    logger.info(f"✅ 숏 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
+                    # exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
+                else:
+                    logger.warning("⛔ 보유 중인 숏 포지션이 없어 청산 불가.")
+
             else:
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
 
         except Exception as e:
-            # 🛡️ 안전장치 3: 네트워크/서버 에러 시 무한 루프 폭주 방지
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
             logger.info("🛡️ 방어 로직 작동: 60초 대기 후 재시도합니다...")
             time.sleep(60)
