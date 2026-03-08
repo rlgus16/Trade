@@ -58,32 +58,30 @@ def setup_exchange():
         logger.warning(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
 
 def get_account_state():
-    """현재 포지션 및 미실현 손익(PnL), 잔고 조회"""
     balance = exchange.fetch_balance()
     free_usdt = balance['USDT']['free']
     
     positions = exchange.fetch_positions([SYMBOL])
     
-    long_size = 0.0; long_price = 0.0; long_pnl = 0.0
-    short_size = 0.0; short_price = 0.0; short_pnl = 0.0
+    long_size = 0.0; long_price = 0.0; long_pnl = 0.0; long_contracts = 0.0
+    short_size = 0.0; short_price = 0.0; short_pnl = 0.0; short_contracts = 0.0
     
     for pos in positions:
-        # 포지션의 수량(contracts)과 평단가(entryPrice)를 가져옵니다.
         contracts = float(pos.get('contracts', 0))
         entry_price = float(pos.get('entryPrice', 0))
         
         if pos['side'] == 'long':
-            # 수량 * 평단가로 계산하여 가격 하락 시에도 진입 원금을 유지합니다.
+            long_contracts = contracts 
             long_size = contracts * entry_price 
             long_price = entry_price
             long_pnl = float(pos.get('unrealizedPnl', 0.0))
         elif pos['side'] == 'short':
-            # 숏 포지션도 동일하게 원금 기준으로 계산합니다.
+            short_contracts = contracts
             short_size = abs(contracts * entry_price)
             short_price = entry_price
             short_pnl = float(pos.get('unrealizedPnl', 0.0))
             
-    return free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl
+    return free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, long_contracts, short_contracts
 
 def get_market_data():
     """현재가, 기술적 지표, 그리고 현재 펀딩비를 계산/조회합니다."""
@@ -177,7 +175,7 @@ def run_bot():
             except Exception as e:
                 logger.warning(f"⚠️ 미체결 주문 취소 중 오류 (무시 가능): {e}")
 
-            free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl = get_account_state()
+            free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, long_contracts, short_contracts = get_account_state()
             current_price, recent_data, funding_rate = get_market_data()
             
             logger.info(f"💰 현재가: {current_price} | Funding: {funding_rate:.4f}%")
@@ -248,9 +246,10 @@ def run_bot():
                     if amount_usdt <= 0:
                         logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
                     else:
-                        # 안전하게 조절된 금액으로 수량 다시 계산
                         raw_close_qty = amount_usdt / current_price
-                        close_qty_str = exchange.amount_to_precision(SYMBOL, raw_close_qty)
+                        actual_close_qty = min(raw_close_qty, long_contracts)
+                        
+                        close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
                         final_close_qty = float(close_qty_str)
                         
                         logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
@@ -261,8 +260,10 @@ def run_bot():
             # 💡 숏 포지션 수익 실현/청산 (지정가 매수)
             elif action == "CLOSE_SHORT" and amount_usdt > 0:
                 if short_size > 0:
-                    close_qty = min(order_qty, short_size / current_price)
-                    close_qty_str = exchange.amount_to_precision(SYMBOL, close_qty)
+                    raw_close_qty = amount_usdt / current_price
+                    actual_close_qty = min(raw_close_qty, short_contracts)
+                    
+                    close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
                     final_close_qty = float(close_qty_str)
                     
                     logger.info(f"✅ 숏 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
