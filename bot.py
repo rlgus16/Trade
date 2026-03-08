@@ -4,7 +4,7 @@ import time
 import json
 import pandas as pd
 import pandas_ta as ta
-import logging # 💡 새로 추가된 로깅 모듈
+import logging
 
 # ==========================================
 # 0. 로깅(Logging) 설정 (터미널 & 파일 동시 출력)
@@ -14,8 +14,8 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler("trading_bot.log", encoding='utf-8'), # 텍스트 파일로 저장
-        logging.StreamHandler() # 터미널에도 출력
+        logging.FileHandler("trading_bot.log", encoding='utf-8'),
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger()
@@ -36,7 +36,7 @@ exchange = ccxt.binance({
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future',
-        'positionMode': True # 양방향 거래를 위한 헤지 모드 활성화
+        'positionMode': True
     }
 })
 
@@ -58,28 +58,39 @@ def setup_exchange():
         logger.warning(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
 
 def get_account_state():
-    """현재 포지션 및 잔고 조회"""
+    """현재 포지션 및 미실현 손익(PnL), 잔고 조회"""
     balance = exchange.fetch_balance()
     free_usdt = balance['USDT']['free']
     
     positions = exchange.fetch_positions([SYMBOL])
-    long_size = 0.0; long_price = 0.0
-    short_size = 0.0; short_price = 0.0
+    
+    # 💡 PnL(미실현 손익) 변수 추가
+    long_size = 0.0; long_price = 0.0; long_pnl = 0.0
+    short_size = 0.0; short_price = 0.0; short_pnl = 0.0
     
     for pos in positions:
         if pos['side'] == 'long':
             long_size = float(pos['notional'])
             long_price = float(pos['entryPrice'])
+            long_pnl = float(pos.get('unrealizedPnl', 0.0)) # 💡 롱 미실현 손익
         elif pos['side'] == 'short':
             short_size = abs(float(pos['notional']))
             short_price = float(pos['entryPrice'])
+            short_pnl = float(pos.get('unrealizedPnl', 0.0)) # 💡 숏 미실현 손익
             
-    return free_usdt, long_size, long_price, short_size, short_price
+    return free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl
 
 def get_market_data():
-    """현재가 및 최근 캔들을 가져와 기술적 지표를 계산합니다."""
+    """현재가, 기술적 지표, 그리고 현재 펀딩비를 계산/조회합니다."""
     ticker = exchange.fetch_ticker(SYMBOL)
     current_price = ticker['last']
+    
+    try:
+        funding_info = exchange.fetch_funding_rate(SYMBOL)
+        funding_rate = float(funding_info['fundingRate']) * 100 
+    except Exception as e:
+        logger.warning(f"⚠️ 펀딩비 조회 실패: {e}")
+        funding_rate = 0.0
     
     ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=100)
     
@@ -97,12 +108,12 @@ def get_market_data():
     for row in recent_data:
         row['timestamp'] = str(row['timestamp'])
         
-    return current_price, recent_data
+    return current_price, recent_data, funding_rate
 
 # ==========================================
 # 3. Gemini 3.1 Pro 시그널 분석 함수
 # ==========================================
-def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data):
+def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate):
     system_instruction = """
     너는 바이낸스 선물 시장에서 활동하는 최상위 퀀트 트레이더야. 
     다음 [거래 규칙]을 엄격히 지켜서 판단해.
@@ -110,9 +121,10 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     2. 총 롱 포지션 규모는 2000 USDT를 초과할 수 없다.
     3. 숏 포지션 규모는 현재 보유 중인 롱 포지션 규모를 초과할 수 없다.
     4. 제공된 기술적 지표(RSI, MACD, 볼린저 밴드, 이동평균선)를 철저히 분석하여 추세와 과매수/과매도 구간을 파악해라.
+    5. 현재 미실현 손익(PnL) 상태와 펀딩비(Funding Rate)를 고려하여, 물타기 타점과 헤징(Hedging) 시점을 영리하게 계산해라.
     
     반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
-    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "기술적 지표에 근거한 구체적인 진입/관망 이유"}
+    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
     """
     
     prompt = f"""
@@ -120,8 +132,9 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     
     [현재 계좌 상태]
     - 잔고(Free USDT): {free_usdt}
-    - 현재 Long 포지션: {long_size} USDT (평단가: {long_price})
-    - 현재 Short 포지션: {short_size} USDT (평단가: {short_price})
+    - 현재 Long 포지션: {long_size} USDT (평단가: {long_price}, 미실현손익: {long_pnl} USDT)
+    - 현재 Short 포지션: {short_size} USDT (평단가: {short_price}, 미실현손익: {short_pnl} USDT)
+    - 현재 펀딩비(Funding Rate): {funding_rate}%
     
     [시장 데이터: {SYMBOL}]
     - 현재가: {current_price}
@@ -150,13 +163,15 @@ def run_bot():
     while True:
         try:
             logger.info("="*50)
-            free_usdt, long_size, long_price, short_size, short_price = get_account_state()
-            current_price, recent_data = get_market_data()
             
-            logger.info(f"💰 현재가: {current_price} | Long: {long_size} USDT | Short: {short_size} USDT")
+            free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl = get_account_state()
+            current_price, recent_data, funding_rate = get_market_data()
+            
+            logger.info(f"💰 현재가: {current_price} | Funding: {funding_rate:.4f}%")
+            logger.info(f"📊 LONG: {long_size} USDT (PnL: {long_pnl:.2f}) | SHORT: {short_size} USDT (PnL: {short_pnl:.2f})")
             
             logger.info("🧠 Gemini 3.1 Pro 분석 중...")
-            signal = get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, recent_data)
+            signal = get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate)
             
             action = signal.get('action')
             amount_usdt = float(signal.get('amount_usdt', 0))
