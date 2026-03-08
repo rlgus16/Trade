@@ -1,6 +1,8 @@
 import google.generativeai as genai
 from pybit.unified_trading import HTTP
 import time
+import json
+import re
 
 # 1. API 설정
 GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
@@ -14,7 +16,25 @@ session = HTTP(
     api_secret=BYBIT_API_SECRET
 )
 
-def get_market_analysis(symbol="BTCUSDT"):
+# 2. 트레이딩 규칙 설정 (ETH/USDT, 교차 마진, 5배 레버리지)
+def setup_trading_rules(symbol="ETHUSDT"):
+    try:
+        # 교차 마진(Cross Margin) 설정 (tradeMode=0)
+        session.switch_margin_mode(
+            category="linear",
+            symbol=symbol,
+            tradeMode=0, 
+            buyLeverage="5",
+            sellLeverage="5"
+        )
+        print(f"[{symbol}] 교차 마진(Cross Mode) 및 5배 레버리지 설정 완료")
+    except Exception as e:
+        if "Not modified" in str(e) or "already" in str(e):
+            print(f"[{symbol}] 이미 교차 마진 및 5배 레버리지로 설정되어 있습니다.")
+        else:
+            print(f"마진/레버리지 설정 안내: {e}")
+
+def get_market_analysis(symbol="ETHUSDT"):
     # Bybit에서 최근 캔들 데이터(1시간 봉 10개) 가져오기
     kline = session.get_kline(
         category="linear",
@@ -46,33 +66,60 @@ def get_market_analysis(symbol="BTCUSDT"):
     return response.text
 
 def execute_trade(symbol, decision):
+    # ETH의 경우 최소 주문 수량(qty)을 확인해야 합니다. (예: 0.01)
+    trade_qty = "0.01" 
+
     if decision == "BUY":
-        print(f"[{symbol}] 매수 주문 실행")
+        print(f"[{symbol}] 매수(Long) 주문 실행 (레버리지 5x)")
         return session.place_order(
             category="linear",
             symbol=symbol,
             side="Buy",
             orderType="Market",
-            qty="0.001" # 주문 수량 설정 필요
+            qty=trade_qty 
         )
     elif decision == "SELL":
-        print(f"[{symbol}] 매도 주문 실행")
+        print(f"[{symbol}] 매도(Short) 주문 실행 (레버리지 5x)")
         return session.place_order(
             category="linear",
             symbol=symbol,
             side="Sell",
             orderType="Market",
-            qty="0.001"
+            qty=trade_qty
         )
     else:
-        print("관망 중...")
+        print("관망 중 (포지션 유지 또는 대기)...")
 
-# 실행 루프 (예시: 1시간마다 반복)
-while True:
-    try:
-        analysis_result = get_market_analysis("BTCUSDT")
-        # JSON 응답 파싱 및 결정 추출 로직 추가 필요
-        # execute_trade("BTCUSDT", extracted_decision)
-    except Exception as e:
-        print(f"오류 발생: {e}")
-    time.sleep(3600)
+# --- 메인 실행 블록 ---
+if __name__ == "__main__":
+    TARGET_SYMBOL = "ETHUSDT"
+    
+    # 프로그램 시작 시 1회 레버리지 및 마진 모드 세팅
+    setup_trading_rules(TARGET_SYMBOL)
+
+    # 실행 루프 (예시: 1시간마다 반복)
+    while True:
+        try:
+            print(f"\n--- {TARGET_SYMBOL} 시장 분석 시작 ---")
+            analysis_result = get_market_analysis(TARGET_SYMBOL)
+            
+            # Gemini 응답에서 마크다운(```json) 제거 및 파싱
+            clean_result = re.sub(r"```json\n|\n```|```", "", analysis_result).strip()
+            data = json.loads(clean_result)
+            
+            decision = data.get("decision", "HOLD")
+            reason = data.get("reason", "이유 없음")
+            
+            print(f"AI 판단: {decision}")
+            print(f"분석 이유: {reason}")
+            
+            # 실제 주문 실행
+            execute_trade(TARGET_SYMBOL, decision)
+            
+        except json.JSONDecodeError:
+            print(f"JSON 파싱 실패. AI 응답 포맷이 맞지 않습니다.\n원본: {analysis_result}")
+        except Exception as e:
+            print(f"오류 발생: {e}")
+            
+        print("다음 분석까지 대기 중...")
+        time.sleep(3600) # 1시간 대기
