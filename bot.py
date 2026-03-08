@@ -10,9 +10,7 @@ BINANCE_API_KEY = 'YOUR_BINANCE_API_KEY'
 BINANCE_SECRET = 'YOUR_BINANCE_SECRET'
 GEMINI_API_KEY = 'AIzaSyCnojY9u_hQp9fKqDQdd1YVL57N88FCc4M'
 
-# Gemini 3.1 Pro 모델 설정
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3.1-pro')
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # 바이낸스 선물 객체 생성 (헤지 모드 켜기)
 exchange = ccxt.binance({
@@ -99,8 +97,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     - 최근 15분봉 데이터: {json.dumps(candles)}
     """
     
-try:
-        # 신형 방식: client.models.generate_content 사용
+    try:
         response = client.models.generate_content(
             model='gemini-3.1-pro',
             contents=prompt
