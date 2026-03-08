@@ -214,14 +214,14 @@ def run_bot():
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
                     logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    # exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
+                    exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 else:
                     logger.warning("⛔ 롱 포지션 한도 초과로 진입 불가.")
                     
             elif action == "SHORT" and amount_usdt > 0:
                 if short_size + amount_usdt <= long_size:
                     logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    # exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
+                    exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 else:
                     logger.warning("⛔ 숏 포지션은 롱 포지션 규모 초과 불가.")
             
@@ -242,7 +242,7 @@ def run_bot():
                         final_close_qty = float(close_qty_str)
                         
                         logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
-                        # exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
+                        exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
                 else:
                     logger.warning("⛔ 보유 중인 롱 포지션이 없어 청산 불가.")
 
@@ -254,7 +254,7 @@ def run_bot():
                     final_close_qty = float(close_qty_str)
                     
                     logger.info(f"✅ 숏 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
-                    # exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
+                    exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
                 else:
                     logger.warning("⛔ 보유 중인 숏 포지션이 없어 청산 불가.")
 
@@ -267,7 +267,7 @@ def run_bot():
             time.sleep(60)
             continue 
             
-        time.sleep(300) 
+        time.sleep(1800) 
 
 if __name__ == "__main__":
     run_bot()
