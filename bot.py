@@ -8,7 +8,7 @@ import json
 # ==========================================
 BINANCE_API_KEY = 'YOUR_BINANCE_API_KEY'
 BINANCE_SECRET = 'YOUR_BINANCE_SECRET'
-GEMINI_API_KEY = 'AIzaSyCnojY9u_hQp9fKqDQdd1YVL57N88FCc4M'
+GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -33,6 +33,9 @@ LEVERAGE = 5
 def setup_exchange():
     """레버리지 및 마진 모드(교차) 설정"""
     try:
+        # 💡 [추가된 부분] 거래소의 코인별 최소 주문량, 소수점 규격 정보 불러오기
+        exchange.load_markets() 
+        
         exchange.set_leverage(LEVERAGE, SYMBOL)
         exchange.set_margin_mode('cross', SYMBOL)
         print(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진")
@@ -63,8 +66,8 @@ def get_market_data():
     ticker = exchange.fetch_ticker(SYMBOL)
     current_price = ticker['last']
     
-    # 최근 15분봉 5개 가져오기
-    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='15m', limit=5)
+    # 💡 [수정된 부분] 최근 4시간봉(4h) 5개 가져오기로 변경
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='4h', limit=5)
     candles = [{"time": exchange.iso8601(c[0]), "open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in ohlcv]
     
     return current_price, candles
@@ -94,7 +97,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price,
     
     [시장 데이터: {SYMBOL}]
     - 현재가: {current_price}
-    - 최근 15분봉 데이터: {json.dumps(candles)}
+    - 최근 4시간봉 데이터: {json.dumps(candles)}
     """
     
     try:
@@ -134,13 +137,21 @@ def run_bot():
             
             print(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
-            # 주문 수량(LTC) 계산
-            order_qty = amount_usdt / current_price
+            # 💡 [수정된 부분] 1차 주문 수량(LTC) 계산 (소수점 무한대 발생 가능)
+            raw_order_qty = amount_usdt / current_price
+            
+            # 💡 [핵심 추가 부분] 바이낸스 규격에 맞게 수량 소수점 절사 (Precision 처리)
+            # 만약 amount_usdt가 0이라면 계산할 필요가 없으므로 분기 처리합니다.
+            if amount_usdt > 0:
+                order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
+                order_qty = float(order_qty_str)
+            else:
+                order_qty = 0.0
             
             # 룰 검증 및 주문 실행
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt <= MAX_LONG_USDT:
-                    print(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC)")
+                    print(f"🚀 롱 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
                     # 실제 주문 코드 (안전을 위해 우선 주석 처리해 두었습니다. 테스트 후 주석 해제하세요)
                     # exchange.create_order(SYMBOL, 'market', 'buy', order_qty, params={'positionSide': 'LONG'})
                 else:
@@ -148,7 +159,7 @@ def run_bot():
                     
             elif action == "SHORT" and amount_usdt > 0:
                 if short_size + amount_usdt <= long_size:
-                    print(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC)")
+                    print(f"📉 숏 포지션 진입/추가 (정제된 수량: {order_qty} LTC)")
                     # 실제 주문 코드
                     # exchange.create_order(SYMBOL, 'market', 'sell', order_qty, params={'positionSide': 'SHORT'})
                 else:
