@@ -1,166 +1,167 @@
+import ccxt
 import google.generativeai as genai
-from pybit.unified_trading import HTTP
 import time
 import json
-import re
 
-# 1. API 설정
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
-BYBIT_API_KEY = "YOUR_BYBIT_API_KEY"
-BYBIT_API_SECRET = "YOUR_BYBIT_API_SECRET"
+# ==========================================
+# 1. API 키 설정 (본인의 키로 변경하세요)
+# ==========================================
+BINANCE_API_KEY = 'YOUR_BINANCE_API_KEY'
+BINANCE_SECRET = 'YOUR_BINANCE_SECRET'
+GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'
 
+# Gemini 3.1 Pro 모델 설정
 genai.configure(api_key=GEMINI_API_KEY)
-session = HTTP(
-    testnet=False, # 실거래 시 False, 테스트넷 시 True
-    api_key=BYBIT_API_KEY,
-    api_secret=BYBIT_API_SECRET
-)
+model = genai.GenerativeModel('gemini-3.1-pro')
 
-# 2. 트레이딩 규칙 세팅 (Hedge 모드, 교차, 5배)
-def setup_trading_rules(symbol="ETHUSDT"):
+# 바이낸스 선물 객체 생성 (헤지 모드 켜기)
+exchange = ccxt.binance({
+    'apiKey': BINANCE_API_KEY,
+    'secret': BINANCE_SECRET,
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future',
+        'positionMode': True # 양방향 거래를 위한 헤지 모드 활성화
+    }
+})
+
+SYMBOL = 'LTC/USDT'
+MAX_LONG_USDT = 2000
+LEVERAGE = 5
+
+# ==========================================
+# 2. 초기 셋업 및 데이터 수집 함수
+# ==========================================
+def setup_exchange():
+    """레버리지 및 마진 모드(교차) 설정"""
     try:
-        session.switch_position_mode(category="linear", symbol=symbol, mode=3)
-        print(f"[{symbol}] 양방향(Hedge) 모드 설정 완료")
+        exchange.set_leverage(LEVERAGE, SYMBOL)
+        exchange.set_margin_mode('cross', SYMBOL)
+        print(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진")
     except Exception as e:
-        if "Not modified" not in str(e) and "already" not in str(e):
-            print(f"포지션 모드 설정 안내: {e}")
+        print(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
 
-    try:
-        session.switch_margin_mode(category="linear", symbol=symbol, tradeMode=0, buyLeverage="5", sellLeverage="5")
-        print(f"[{symbol}] 교차 마진 및 5배 레버리지 설정 완료")
-    except Exception:
-        pass
-
-# 3. 현재 포지션 정보 가져오기
-def get_positions_info(symbol):
-    positions = session.get_positions(category="linear", symbol=symbol)['result']['list']
-    long_pos = {"size": 0.0, "avgPrice": 0.0}
-    short_pos = {"size": 0.0, "avgPrice": 0.0}
+def get_account_state():
+    """현재 포지션 및 잔고 조회"""
+    balance = exchange.fetch_balance()
+    free_usdt = balance['USDT']['free']
     
-    for p in positions:
-        if p['positionIdx'] == 1: # Long
-            long_pos['size'] = float(p['size'])
-            long_pos['avgPrice'] = float(p['avgPrice'])
-        elif p['positionIdx'] == 2: # Short
-            short_pos['size'] = float(p['size'])
-            short_pos['avgPrice'] = float(p['avgPrice'])
+    positions = exchange.fetch_positions([SYMBOL])
+    long_size = 0.0; long_price = 0.0
+    short_size = 0.0; short_price = 0.0
+    
+    for pos in positions:
+        if pos['side'] == 'long':
+            long_size = float(pos['notional'])
+            long_price = float(pos['entryPrice'])
+        elif pos['side'] == 'short':
+            short_size = abs(float(pos['notional']))
+            short_price = float(pos['entryPrice'])
             
-    return long_pos, short_pos
+    return free_usdt, long_size, long_price, short_size, short_price
 
-# 4. Gemini 시장 분석 및 수량 결정
-def get_market_analysis(symbol, long_pos, short_pos):
-    kline = session.get_kline(category="linear", symbol=symbol, interval=60, limit=10)
-    data_list = kline['result']['list']
+def get_market_data():
+    """현재가 및 최근 캔들 데이터 조회"""
+    ticker = exchange.fetch_ticker(SYMBOL)
+    current_price = ticker['last']
     
-    # 현재가(가장 최근 캔들의 종가) 추출
-    current_price = float(data_list[0][4]) 
+    # 최근 15분봉 5개 가져오기
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe='15m', limit=5)
+    candles = [{"time": exchange.iso8601(c[0]), "open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in ohlcv]
     
-    # 현재 포지션의 USDT 가치 계산
-    long_usdt = long_pos['size'] * current_price
-    short_usdt = short_pos['size'] * current_price
+    return current_price, candles
+
+# ==========================================
+# 3. Gemini 3.1 Pro 시그널 분석 함수
+# ==========================================
+def get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, candles):
+    system_instruction = """
+    너는 바이낸스 선물 시장에서 활동하는 퀀트 트레이더야. 
+    다음 [거래 규칙]을 엄격히 지켜서 판단해.
+    1. 어떠한 상황에서도 손실 확정(Stop-Loss)을 하지 마라. (물타기로 대응)
+    2. 총 롱 포지션 규모는 2000 USDT를 초과할 수 없다.
+    3. 숏 포지션 규모는 현재 보유 중인 롱 포지션 규모를 초과할 수 없다.
     
-    model = genai.GenerativeModel('gemini-3.1-pro')
-    prompt = f"""
-    너는 전문 퀀트 트레이더야. 아래 데이터를 바탕으로 트레이딩 결정을 내려줘.
-    
-    [현재 상태]
-    - 현재 {symbol} 가격: {current_price} USDT
-    - Long 포지션: 수량 {long_pos['size']} ETH (약 {long_usdt:.2f} USDT 가치), 평단가 {long_pos['avgPrice']}
-    - Short 포지션: 수량 {short_pos['size']} ETH (약 {short_usdt:.2f} USDT 가치), 평단가 {short_pos['avgPrice']}
-    
-    [트레이딩 절대 규칙]
-    1. 절대 손절(Stop Loss)을 지시하지 마.
-    2. 양방향(Hedge) 포지션을 운영 중이야.
-    3. Short 포지션의 총 수량은 Long 포지션의 총 수량을 초과할 수 없어.
-    4. 현재 물려있는 포지션이 있다면, 평단가를 낮추기 위한 물타기(Averaging down)를 적극적으로 고려해.
-    5. Long 포지션의 총 가치는 절대 2000 USDT를 초과할 수 없어. (현재 약 {long_usdt:.2f} USDT 보유 중)
-    6. 진입 수량(qty)은 시장 상황과 리스크를 고려하여 네가 직접 결정해. (단위: ETH, 최소 0.01 이상)
-    
-    [최근 {symbol} 캔들 데이터]
-    {str(data_list)}
-    
-    응답은 반드시 아래 JSON 형식으로만 해줘:
-    {{"decision": "OPEN_LONG" 또는 "OPEN_SHORT" 또는 "HOLD", "qty": 0.01, "reason": "이유 요약"}}
+    반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
+    {"action": "LONG" | "SHORT" | "HOLD", "amount_usdt": 진입금액(USDT숫자), "reasoning": "이유 설명"}
     """
     
-    response = model.generate_content(prompt)
-    return response.text, current_price
-
-# 5. 주문 실행 (안전 장치 포함)
-def execute_trade(symbol, decision, ai_qty, long_pos, short_pos, current_price):
-    if decision == "HOLD":
-        print("관망 중 (포지션 유지 또는 대기)...")
-        return
-
-    # AI가 제안한 수량을 숫자로 변환 (기본값 0.01)
-    try:
-        trade_qty = float(ai_qty)
-    except (ValueError, TypeError):
-        trade_qty = 0.01
-        
-    # ETH 거래 최소 수량 및 소수점 둘째 자리 맞춤
-    trade_qty = max(0.01, round(trade_qty, 2))
-
-    if decision == "OPEN_LONG":
-        current_long_usdt = long_pos['size'] * current_price
-        trade_usdt = trade_qty * current_price
-        
-        # 1. 롱 포지션 2000 USDT 초과 방지 로직
-        if current_long_usdt + trade_usdt > 2000:
-            max_allowable_eth = (2000 - current_long_usdt) / current_price
-            trade_qty = round(max_allowable_eth - 0.005, 2) # 내림 효과로 안전하게 계산
-            
-            if trade_qty < 0.01:
-                print(f"[{symbol}] 롱 포지션 한도(2000 USDT) 도달. 더 이상 매수할 수 없습니다. (현재: {current_long_usdt:.2f} USDT)")
-                return None
-            print(f"[{symbol}] ⚠️ 롱 포지션 2000 USDT 한도 제한 발동! AI 제안 수량보다 적은 {trade_qty} ETH만 진입합니다.")
-            
-        print(f"[{symbol}] 롱(Long) 진입 또는 물타기 실행 (수량: {trade_qty} ETH)")
-        return session.place_order(category="linear", symbol=symbol, side="Buy", orderType="Market", qty=str(trade_qty), positionIdx=1)
-        
-    elif decision == "OPEN_SHORT":
-        # 2. 숏 수량 초과 방지 로직
-        if (short_pos['size'] + trade_qty) > long_pos['size']:
-            max_short_qty = long_pos['size'] - short_pos['size']
-            trade_qty = round(max_short_qty - 0.005, 2)
-            
-            if trade_qty < 0.01:
-                print(f"[{symbol}] 숏 주문 거부: 숏 수량이 롱 수량을 초과할 수 없습니다.")
-                return None
-            print(f"[{symbol}] ⚠️ 숏 수량 제한 발동! AI 제안 수량보다 적은 {trade_qty} ETH만 진입합니다.")
-            
-        print(f"[{symbol}] 숏(Short) 진입 또는 물타기 실행 (수량: {trade_qty} ETH)")
-        return session.place_order(category="linear", symbol=symbol, side="Sell", orderType="Market", qty=str(trade_qty), positionIdx=2)
-
-# --- 메인 실행 블록 ---
-if __name__ == "__main__":
-    TARGET_SYMBOL = "ETHUSDT"
+    prompt = f"""
+    {system_instruction}
     
-    setup_trading_rules(TARGET_SYMBOL)
+    [현재 계좌 상태]
+    - 잔고(Free USDT): {free_usdt}
+    - 현재 Long 포지션: {long_size} USDT (평단가: {long_price})
+    - 현재 Short 포지션: {short_size} USDT (평단가: {short_price})
+    
+    [시장 데이터: {SYMBOL}]
+    - 현재가: {current_price}
+    - 최근 15분봉 데이터: {json.dumps(candles)}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        # JSON 포맷 파싱 (마크다운 백틱이 섞여올 경우 제거)
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
+        signal_data = json.loads(clean_text)
+        return signal_data
+    except Exception as e:
+        print(f"⚠️ Gemini 분석 오류: {e}")
+        return {"action": "HOLD", "amount_usdt": 0, "reasoning": "Error parsing Gemini response"}
 
+# ==========================================
+# 4. 메인 거래 실행 로직
+# ==========================================
+def run_bot():
+    setup_exchange()
+    
     while True:
         try:
-            print(f"\n--- {TARGET_SYMBOL} 시장 분석 시작 ---")
+            print("\n" + "="*40)
+            free_usdt, long_size, long_price, short_size, short_price = get_account_state()
+            current_price, candles = get_market_data()
             
-            long_info, short_info = get_positions_info(TARGET_SYMBOL)
-            analysis_result, cur_price = get_market_analysis(TARGET_SYMBOL, long_info, short_info)
+            print(f"💰 현재가: {current_price} | Long: {long_size} USDT | Short: {short_size} USDT")
             
-            clean_result = re.sub(r"```json\n|\n```|```", "", analysis_result).strip()
-            data = json.loads(clean_result)
+            # Gemini에게 시그널 요청
+            print("🧠 Gemini 3.1 Pro 분석 중...")
+            signal = get_gemini_signal(free_usdt, long_size, long_price, short_size, short_price, current_price, candles)
             
-            decision = data.get("decision", "HOLD")
-            ai_qty = data.get("qty", 0.01)
-            reason = data.get("reason", "이유 없음")
+            action = signal.get('action')
+            amount_usdt = float(signal.get('amount_usdt', 0))
+            reason = signal.get('reasoning')
             
-            print(f"AI 판단: {decision} / 제안 수량: {ai_qty} ETH")
-            print(f"분석 이유: {reason}")
+            print(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
-            execute_trade(TARGET_SYMBOL, decision, ai_qty, long_info, short_info, cur_price)
+            # 주문 수량(LTC) 계산
+            order_qty = amount_usdt / current_price
             
-        except json.JSONDecodeError:
-            print(f"JSON 파싱 실패. AI 응답 포맷 오류.\n원본: {analysis_result}")
+            # 룰 검증 및 주문 실행
+            if action == "LONG" and amount_usdt > 0:
+                if long_size + amount_usdt <= MAX_LONG_USDT:
+                    print(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC)")
+                    # 실제 주문 코드 (안전을 위해 우선 주석 처리해 두었습니다. 테스트 후 주석 해제하세요)
+                    # exchange.create_order(SYMBOL, 'market', 'buy', order_qty, params={'positionSide': 'LONG'})
+                else:
+                    print("⛔ 롱 포지션 한도(2000 USDT) 초과로 진입 불가.")
+                    
+            elif action == "SHORT" and amount_usdt > 0:
+                if short_size + amount_usdt <= long_size:
+                    print(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC)")
+                    # 실제 주문 코드
+                    # exchange.create_order(SYMBOL, 'market', 'sell', order_qty, params={'positionSide': 'SHORT'})
+                else:
+                    print("⛔ 숏 포지션은 롱 포지션 규모를 초과할 수 없어 진입 불가.")
+            
+            else:
+                print("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
+
         except Exception as e:
-            print(f"오류 발생: {e}")
+            print(f"에러 발생: {e}")
             
-        print("다음 분석까지 대기 중...")
-        time.sleep(3600) # 1시간 대기
+        # 5분마다 반복 실행 (원하는 주기로 변경 가능)
+        time.sleep(300) 
+
+if __name__ == "__main__":
+    # 봇 실행 시작
+    run_bot()
