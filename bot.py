@@ -117,13 +117,21 @@ def get_market_data():
     
     df.fillna(0, inplace=True)
     
+    # 라이브러리 버전에 따른 이름 차이 에러를 막기 위해 동적으로 컬럼명 탐색
+    rsi_col = next(c for c in df.columns if c.startswith('RSI'))
+    macd_col = next(c for c in df.columns if c.startswith('MACD_'))
+    macds_col = next(c for c in df.columns if c.startswith('MACDs_'))
+    bbu_col = next(c for c in df.columns if c.startswith('BBU'))
+    bbl_col = next(c for c in df.columns if c.startswith('BBL'))
+    sma_col = next(c for c in df.columns if c.startswith('SMA'))
+    
     recent_data = []
     for _, row in df.tail(6).iterrows():
         recent_data.append({
             "t": str(row['timestamp'])[-8:], # 시각만 추출
             "o": row['open'], "h": row['high'], "l": row['low'], "c": row['close'], "v": row['volume'],
-            "rsi": row['RSI_14'], "m": row['MACD_12_26_9'], "ms": row['MACDs_12_26_9'],
-            "bb_u": row['BBU_20_2.0'], "bb_l": row['BBL_20_2.0'], "sma": row['SMA_20']
+            "rsi": row[rsi_col], "m": row[macd_col], "ms": row[macds_col],
+            "bb_u": row[bbu_col], "bb_l": row[bbl_col], "sma": row[sma_col]
         })
         
     return current_price, recent_data, funding_rate
