@@ -332,4 +332,10 @@ def run_bot():
         time.sleep(1800) 
 
 if __name__ == "__main__":
-    run_bot()
+    try:
+        logger.info("🚀 트레이딩 봇 가동을 시작합니다...")
+        run_bot()
+    except KeyboardInterrupt:
+        logger.info("🛑 사용자에 의해 봇이 안전하게 종료되었습니다 (Ctrl+C).")
+    except Exception as e:
+        logger.critical(f"💥 치명적인 오류로 봇이 종료되었습니다: {e}")
