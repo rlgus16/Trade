@@ -299,8 +299,8 @@ def run_bot():
 
         except Exception as e:
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
-            logger.info("🛡️ 방어 로직 작동: 60초 대기 후 재시도합니다...")
-            time.sleep(60)
+            logger.info("🛡️ 방어 로직 작동: 10분 대기 후 재시도합니다...")
+            time.sleep(600)
             continue 
             
         time.sleep(1800) 
