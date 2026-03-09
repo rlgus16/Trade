@@ -118,7 +118,7 @@ def get_market_data():
     df.fillna(0, inplace=True)
     
     recent_data = []
-    for _, row in df.tail(3).iterrows():
+    for _, row in df.tail(6).iterrows():
         recent_data.append({
             "t": str(row['timestamp'])[-8:], # 시각만 추출
             "o": row['open'], "h": row['high'], "l": row['low'], "c": row['close'], "v": row['volume'],
