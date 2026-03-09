@@ -164,7 +164,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
         return signal_data
     except Exception as e:
         logger.error(f"⚠️ Gemini 분석 오류: {e}")
-        return {"action": "HOLD", "amount_usdt": 0, "reasoning": f"Error: {e}"}
+        return {"act": "H", "amt": 0, "rsn": f"Error: {e}"}
 
 # ==========================================
 # 4. 메인 거래 실행 로직
