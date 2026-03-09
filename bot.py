@@ -199,29 +199,56 @@ def run_bot():
             
             logger.info(f"🔔 시그널: {action} | 목표 지정가: {target_price} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
-            # 🛡️ 안전장치 1: 바이낸스 최소 주문 금액 (5 USDT) 방어 (진입/청산 모두 적용)
-            if action in ["LONG", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"] and amount_usdt > 0:
-                if amount_usdt < 5.0:
-                    logger.warning(f"🛡️ 방어 로직 작동: 금액({amount_usdt} USDT)이 바이낸스 최소 한도 미만입니다. 관망(HOLD)으로 전환합니다.")
-                    action = "HOLD"
-                    amount_usdt = 0.0
+            # ==========================================
+            # 💡 1차 방어: 신규 진입 시 '전면 거절' 대신 '부분 진입(금액 축소)'으로 유연성 확보
+            # ==========================================
+            if action == "LONG" and amount_usdt > 0:
+                if long_size + amount_usdt > MAX_LONG_USDT:
+                    available_space = MAX_LONG_USDT - long_size
+                    if available_space >= 5.0:
+                        logger.info(f"🔄 롱 한도 초과 감지: 요청 금액을 남은 한도({available_space:.2f} USDT)로 축소하여 부분 진입합니다.")
+                        amount_usdt = available_space
+                    else:
+                        logger.warning("⛔ 롱 포지션이 최대 한도에 도달하여 추가 진입 불가.")
+                        action = "HOLD"; amount_usdt = 0.0
+                        
+            elif action == "SHORT" and amount_usdt > 0:
+                if short_size + amount_usdt > long_size:
+                    available_space = long_size - short_size
+                    if available_space >= 5.0:
+                        logger.info(f"🔄 숏 한도 초과 감지: 숏은 롱 규모를 넘을 수 없어 남은 한도({available_space:.2f} USDT)로 축소 진입합니다.")
+                        amount_usdt = available_space
+                    else:
+                        logger.warning("⛔ 숏 포지션이 롱 규모와 동일하여 추가 진입 불가.")
+                        action = "HOLD"; amount_usdt = 0.0
 
-            # 🛡️ 안전장치 2: 가용 증거금 부족 방어 (신규 진입인 LONG, SHORT에만 적용)
+            # 🛡️ 2차 방어: 가용 증거금 부족 시에도 전면 거절 대신 '가용 한도 내 최대 진입'
             if action in ["LONG", "SHORT"] and amount_usdt > 0:
                 required_margin = amount_usdt / LEVERAGE
                 if required_margin > free_usdt:
-                    logger.warning(f"🛡️ 방어 로직 작동: 가용 잔고 부족! (필요: {required_margin:.2f} > 잔고: {free_usdt:.2f}). 관망(HOLD)으로 전환합니다.")
+                    max_possible_usdt = free_usdt * LEVERAGE * 0.95 # 수수료 및 슬리피지 여유분 5% 차감
+                    if max_possible_usdt >= 5.0:
+                        logger.warning(f"🔄 잔고 부족 감지: 요청 금액을 최대 가용 금액({max_possible_usdt:.2f} USDT)으로 축소 진입합니다.")
+                        amount_usdt = max_possible_usdt
+                    else:
+                        logger.warning("⛔ 가용 잔고가 너무 부족하여 진입할 수 없습니다. 관망(HOLD) 전환.")
+                        action = "HOLD"; amount_usdt = 0.0
+
+            # 🛡️ 3차 방어: 바이낸스 최소 주문 금액 (5 USDT) 1차 공통 확인
+            if action in ["LONG", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"] and amount_usdt > 0:
+                if amount_usdt < 5.0:
+                    logger.warning(f"🛡️ 최종 요청 금액({amount_usdt:.2f} USDT)이 바이낸스 최소 한도 미만입니다. 관망(HOLD) 전환.")
                     action = "HOLD"
                     amount_usdt = 0.0
             
+            # ==========================================
+            # 💡 조절이 완료된 최종 금액으로 수량(qty) 및 가격(price) 정밀도 계산
+            # ==========================================
             raw_order_qty = amount_usdt / target_price if target_price > 0 else 0
             
-            # 💡 수량 및 지정가(가격) 정밀도 동시 처리
             if amount_usdt > 0:
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
-                
-                # 💡 지정가 주문이 깔릴 가격을 AI가 예측한 target_price로 세팅
                 order_price_str = exchange.price_to_precision(SYMBOL, target_price)
                 order_price = float(order_price_str)
             else:
@@ -229,21 +256,15 @@ def run_bot():
                 order_price = 0.0
             
             # ==========================================
-            # 💡 실제 주문 실행부 (지정가 및 독립 청산 로직 완벽 적용)
+            # 💡 실제 주문 실행부
             # ==========================================
             if action == "LONG" and amount_usdt > 0:
-                if long_size + amount_usdt <= MAX_LONG_USDT:
-                    logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
-                else:
-                    logger.warning("⛔ 롱 포지션 한도 초과로 진입 불가.")
+                logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
+                exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                     
             elif action == "SHORT" and amount_usdt > 0:
-                if short_size + amount_usdt <= long_size:
-                    logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
-                    exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
-                else:
-                    logger.warning("⛔ 숏 포지션은 롱 포지션 규모 초과 불가.")
+                logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
+                exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
             
             # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
             elif action == "CLOSE_LONG" and amount_usdt > 0:
