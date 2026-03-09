@@ -127,9 +127,10 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     5. 현재 미실현 손익(PnL) 상태와 펀딩비(Funding Rate)를 고려하여, 물타기 타점과 헤징(Hedging) 시점을 영리하게 계산해라.
     6. [매우 중요] 롱 포지션을 청산(CLOSE_LONG)할 때, 청산 후 남은 롱 포지션의 규모가 숏 포지션의 규모보다 작아지면 절대 안 된다. (숏 포지션의 무한 손실을 방어하기 위한 필수 헤징 유지)
     7. 수익 실현이 필요할 경우 CLOSE_LONG 또는 CLOSE_SHORT 액션을 사용하여 보유 중인 포지션을 청산해라.
+    8. 특정 가격을 예측하여 지정가(Limit) 주문을 걸어둔다. 진입(LONG/SHORT) 시에는 지지/저항선을 분석하여 매복할 대기 가격을 설정하고, 익절 시에는 목표 수익 가격을 설정해라. 당장 체결되는 것이 유리하다고 판단되면 현재가와 비슷하게 설정해라.
     
     반드시 아래 JSON 형식으로만 응답해. 마크다운이나 다른 텍스트는 금지.
-    {"action": "LONG" | "SHORT" | "CLOSE_LONG" | "CLOSE_SHORT" | "HOLD", "amount_usdt": 진입또는청산금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
+    {"action": "LONG" | "SHORT" | "CLOSE_LONG" | "CLOSE_SHORT" | "HOLD", "target_price": 예측한주문목표가격(숫자), "amount_usdt": 진입또는청산금액(USDT숫자), "reasoning": "기술적 지표 및 PnL/펀딩비를 근거로 한 상세한 이유"}
     """
     
     prompt = f"""
@@ -186,9 +187,15 @@ def run_bot():
             
             action = signal.get('action')
             amount_usdt = float(signal.get('amount_usdt', 0))
+            
+            # AI가 예측한 목표가(target_price) 받아오기 (오류 시 현재가로 방어)
+            target_price = float(signal.get('target_price', current_price))
+            if target_price <= 0:
+                target_price = current_price
+                
             reason = signal.get('reasoning')
             
-            logger.info(f"🔔 시그널: {action} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
+            logger.info(f"🔔 시그널: {action} | 목표 지정가: {target_price} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
             # 🛡️ 안전장치 1: 바이낸스 최소 주문 금액 (5 USDT) 방어 (진입/청산 모두 적용)
             if action in ["LONG", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"] and amount_usdt > 0:
@@ -205,14 +212,15 @@ def run_bot():
                     action = "HOLD"
                     amount_usdt = 0.0
             
-            raw_order_qty = amount_usdt / current_price if current_price > 0 else 0
+            raw_order_qty = amount_usdt / target_price if target_price > 0 else 0
             
             # 💡 수량 및 지정가(가격) 정밀도 동시 처리
             if amount_usdt > 0:
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
                 
-                order_price_str = exchange.price_to_precision(SYMBOL, current_price)
+                # 💡 지정가 주문이 깔릴 가격을 AI가 예측한 target_price로 세팅
+                order_price_str = exchange.price_to_precision(SYMBOL, target_price)
                 order_price = float(order_price_str)
             else:
                 order_qty = 0.0
