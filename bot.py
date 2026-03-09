@@ -51,9 +51,11 @@ def setup_exchange():
     """레버리지 및 마진 모드(교차) 설정"""
     try:
         exchange.load_markets() 
+        # 바이낸스 계정 자체를 명시적으로 양방향(헤지) 모드로 변경
+        exchange.set_position_mode(True)
         exchange.set_leverage(LEVERAGE, SYMBOL)
         exchange.set_margin_mode('cross', SYMBOL)
-        logger.info(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진")
+        logger.info(f"✅ {SYMBOL} 셋업 완료: {LEVERAGE}x 레버리지, 교차(Cross) 마진, 양방향(Hedge) 모드")
     except Exception as e:
         logger.warning(f"⚠️ 셋업 경고 (이미 설정되어 있을 수 있음): {e}")
 
@@ -246,12 +248,15 @@ def run_bot():
             # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
             elif action == "CLOSE_LONG" and amount_usdt > 0:
                 if long_size > 0:
-                    # 🛡️ 롱을 팔고 나서 남는 금액이 숏보다 작아지면 안 됨!
                     if (long_size - amount_usdt) < short_size:
                         logger.warning(f"🛡️ 헤지 방어 작동: 롱 청산 후 남은 롱이 숏({short_size} USDT)보다 적어집니다! 숏 노출 위험으로 청산 금액을 축소합니다.")
                         amount_usdt = long_size - short_size 
                         
-                    if amount_usdt <= 0:
+                    # 축소된 청산 금액이 바이낸스 최소 주문 한도(5 USDT) 미만이 되어버렸는지 2차 검사
+                    if amount_usdt > 0 and amount_usdt < 5.0:
+                        logger.warning("⛔ 방어 로직으로 축소된 청산 금액이 5 USDT 미만이 되어, 바이낸스 최소 한도 에러를 방지하기 위해 청산을 취소합니다.")
+                        
+                    elif amount_usdt <= 0:
                         logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
                     else:
                         raw_close_qty = amount_usdt / long_price
