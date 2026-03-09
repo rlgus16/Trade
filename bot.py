@@ -6,17 +6,25 @@ import pandas as pd
 import pandas_ta as ta
 import logging
 
+from logging.handlers import RotatingFileHandler
+
 # ==========================================
 # 0. 로깅(Logging) 설정 (터미널 & 파일 동시 출력)
 # ==========================================
+# 최대 5MB 크기로 제한하고, 최근 10개의 파일만 유지합니다.
+file_handler = RotatingFileHandler(
+    "trading_bot.log", 
+    maxBytes=5 * 1024 * 1024,
+    backupCount=10,
+    encoding='utf-8'
+)
+stream_handler = logging.StreamHandler()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler("trading_bot.log", encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, stream_handler]
 )
 logger = logging.getLogger()
 
