@@ -259,8 +259,13 @@ def run_bot():
                     elif amount_usdt <= 0:
                         logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
                     else:
-                        raw_close_qty = amount_usdt / long_price
-                        actual_close_qty = min(raw_close_qty, long_contracts)
+                        # 전량 청산 의도시 먼지(Dust) 방지
+                        if amount_usdt >= long_size * 0.99:
+                            logger.info("🧹 전량 청산: 잔류 방지를 위해 보유 롱 수량 전체를 매도합니다.")
+                            actual_close_qty = long_contracts
+                        else:
+                            raw_close_qty = amount_usdt / long_price
+                            actual_close_qty = min(raw_close_qty, long_contracts)
                         
                         close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
                         final_close_qty = float(close_qty_str)
@@ -273,8 +278,13 @@ def run_bot():
             # 💡 숏 포지션 수익 실현/청산 (지정가 매수)
             elif action == "CLOSE_SHORT" and amount_usdt > 0:
                 if short_size > 0:
-                    raw_close_qty = amount_usdt / short_price
-                    actual_close_qty = min(raw_close_qty, short_contracts)
+                    # 전량 청산 의도시 먼지(Dust) 방지
+                    if amount_usdt >= short_size * 0.99:
+                        logger.info("🧹 전량 청산: 잔류 방지를 위해 보유 숏 수량 전체를 매수합니다.")
+                        actual_close_qty = short_contracts
+                    else:
+                        raw_close_qty = amount_usdt / short_price
+                        actual_close_qty = min(raw_close_qty, short_contracts)
                     
                     close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
                     final_close_qty = float(close_qty_str)
