@@ -109,9 +109,14 @@ def get_market_data():
     
     df.fillna(0, inplace=True)
     
-    recent_data = df.tail(3).to_dict(orient='records')
-    for row in recent_data:
-        row['timestamp'] = str(row['timestamp'])
+    recent_data = []
+    for _, row in df.tail(3).iterrows():
+        recent_data.append({
+            "t": str(row['timestamp'])[-8:], # 시각만 추출
+            "o": row['open'], "h": row['high'], "l": row['low'], "c": row['close'], "v": row['volume'],
+            "rsi": row['RSI_14'], "m": row['MACD_12_26_9'], "ms": row['MACDs_12_26_9'],
+            "bb_u": row['BBU_20_2.0'], "bb_l": row['BBL_20_2.0'], "sma": row['SMA_20']
+        })
         
     return current_price, recent_data, funding_rate
 
@@ -120,9 +125,6 @@ def get_market_data():
 # ==========================================
 def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate):
     system_instruction = """
-    You are a top-tier quantitative trader operating in the Binance Futures market.
-    Strictly follow the [Trading Rules] below to make your decisions:
-    
     1. NEVER execute a Stop-Loss under any circumstances. (Respond by averaging down / scaling in).
     2. The total LONG position size must not exceed 2000 USDT.
     3. The total SHORT position size must not exceed your current LONG position size.
@@ -132,8 +134,9 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     7. When profit realization is needed, use the CLOSE_LONG or CLOSE_SHORT actions to close the corresponding positions.
     8. Predict a specific target price to place a Limit order. For entries (LONG/SHORT), analyze support/resistance levels to set an ambush (waiting) price. For exits, set a target profit price. If immediate execution is advantageous, set it close to the current price.
     
-    You MUST respond ONLY in the exact JSON format below. No markdown formatting, no additional text.
-    {"action": "LONG" | "SHORT" | "CLOSE_LONG" | "CLOSE_SHORT" | "HOLD", "target_price": <predicted_number>, "amount_usdt": <usdt_number>, "reasoning": "<detailed reasoning>"}
+    Respond ONLY in this JSON:
+    {"act": "L"|"S"|"CL"|"CS"|"H", "tp": <price>, "amt": <usdt>, "rsn": "<reasoning>"}
+    (L:LONG, S:SHORT, CL:CLOSE_LONG, CS:CLOSE_SHORT, H:HOLD)
     """
     
     prompt = f"""
@@ -147,7 +150,7 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     
     [Market Data: {SYMBOL}]
     - Current Price: {current_price}
-    - Recent 4H timeframe data & Technical Indicators: {json.dumps(recent_data, indent=2)}
+    - Recent 4H timeframe data & Technical Indicators: {json.dumps(recent_data, separators=(',', ':'))}
     """
     
     try:
@@ -188,15 +191,16 @@ def run_bot():
             logger.info("🧠 Gemini 3.1 Pro-preview 분석 중...")
             signal = get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate)
             
-            action = signal.get('action')
-            amount_usdt = float(signal.get('amount_usdt', 0))
+            action_map = {"L": "LONG", "S": "SHORT", "CL": "CLOSE_LONG", "CS": "CLOSE_SHORT", "H": "HOLD"}
+            action = action_map.get(signal.get('act'), "HOLD")
+            amount_usdt = float(signal.get('amt', 0))
             
-            # AI가 예측한 목표가(target_price) 받아오기 (오류 시 현재가로 방어)
-            target_price = float(signal.get('target_price', current_price))
+            # tp(target_price) 받아오기
+            target_price = float(signal.get('tp', current_price))
             if target_price <= 0:
                 target_price = current_price
                 
-            reason = signal.get('reasoning')
+            reason = signal.get('rsn')
             
             logger.info(f"🔔 시그널: {action} | 목표 지정가: {target_price} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
