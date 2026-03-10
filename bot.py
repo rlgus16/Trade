@@ -149,9 +149,10 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     6. Do not hedge if free_balance is abundant.
     7. Focus on maximizing profit, rather than hedging.
     8. Open both LONG and SHORT position to maximize profit.
-    9. Use CLOSE_LONG or CLOSE_SHORT actions to realize profit.
+    9. CLOSE_LONG or CLOSE_SHORT to realize profit.
     10. Predict and place specific limit_order_prices for entries. 
-    11. Predict and place take_profit_prices upon new entries.
+    11. Predict and place take_profit_orders for open positions.
+    12. Instead of HOLDING, place take_profit_orders to maximize profit.
     
     Respond ONLY in this JSON:
     {"act": "L"|"S"|"CL"|"CS"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
@@ -196,15 +197,9 @@ def run_bot():
             logger.info("="*50)
             
             try:
-                # 일반 진입 지정가(limit) 주문만 취소하고 Take Profit 주문은 유지합니다.
-                open_orders = exchange.fetch_open_orders(SYMBOL)
-                cancel_count = 0
-                for order in open_orders:
-                    if order['type'] == 'limit':
-                        exchange.cancel_order(order['id'], SYMBOL)
-                        cancel_count += 1
-                if cancel_count > 0:
-                    logger.info(f"🧹 {SYMBOL} 미체결 진입 주문 {cancel_count}건 정리 완료 (TP 주문 유지)")
+                # 이전 루프의 미체결 지정가 및 익절(TP) 주문을 모두 취소하여 초기화합니다.
+                exchange.cancel_all_orders(SYMBOL)
+                logger.info(f"🧹 {SYMBOL} 미체결 주문 및 기존 TP 주문 모두 정리 완료")
             except Exception as e:
                 logger.warning(f"⚠️ 미체결 주문 취소 중 오류 (무시 가능): {e}")
 
@@ -296,19 +291,29 @@ def run_bot():
                 logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 
-                # Take Profit 주문 추가 (롱: 목표가가 진입가보다 높을 때만)
+                # 신규 진입 물량에 대한 TP 예약
                 if tp_price > order_price:
-                    logger.info(f"🎯 롱 포지션 익절(TP) 예약 (목표가: {tp_price} USDT)")
+                    logger.info(f"🎯 신규 롱 진입 익절(TP) 예약 (목표가: {tp_price} USDT)")
                     exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', order_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
+                
+                # 기존 롱 포지션이 있다면 기존 물량에 대해서도 새 TP 재설정
+                if long_contracts > 0 and tp_price > current_price:
+                    logger.info(f"🎯 기존 롱 포지션 익절(TP) 재설정 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={'positionSide': 'LONG', 'stopPrice': tp_price})
                     
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 
-                # Take Profit 주문 추가 (숏: 목표가가 진입가보다 낮을 때만)
+                # 신규 진입 물량에 대한 TP 예약
                 if tp_price > 0 and tp_price < order_price:
-                    logger.info(f"🎯 숏 포지션 익절(TP) 예약 (목표가: {tp_price} USDT)")
+                    logger.info(f"🎯 신규 숏 진입 익절(TP) 예약 (목표가: {tp_price} USDT)")
                     exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', order_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
+                    
+                # 기존 숏 포지션이 있다면 기존 물량에 대해서도 새 TP 재설정
+                if short_contracts > 0 and tp_price > 0 and tp_price < current_price:
+                    logger.info(f"🎯 기존 숏 포지션 익절(TP) 재설정 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
             
             # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
             elif action == "CLOSE_LONG" and amount_usdt > 0:
@@ -361,6 +366,15 @@ def run_bot():
 
             else:
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
+                
+                # 관망 중이더라도 보유 포지션이 있고 유효한 tp가 있다면 TP 주문 갱신
+                if tp_price > 0:
+                    if long_contracts > 0 and tp_price > current_price:
+                        logger.info(f"🎯 기존 롱 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={'positionSide': 'LONG', 'stopPrice': tp_price})
+                    elif short_contracts > 0 and tp_price < current_price:
+                        logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
 
         except Exception as e:
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
