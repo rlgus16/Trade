@@ -191,6 +191,9 @@ def run_bot():
     setup_exchange()
     
     while True:
+        # ⏰ 메인 사이클(루프) 시작 시간을 기록합니다.
+        loop_start_time = time.time()
+        
         try:
             logger.info("="*50)
             
@@ -407,7 +410,16 @@ def run_bot():
             time.sleep(600)
             continue 
             
-        time.sleep(1800)
+        # ==========================================
+        # ⏰ 남은 시간 계산 및 스마트 대기 로직
+        # ==========================================
+        elapsed_time = time.time() - loop_start_time 
+        remaining_sleep_time = max(0, 1800 - elapsed_time) 
+        
+        logger.info(f"⏳ 현재 사이클 완료. 분석, 주문 및 감시에 {elapsed_time:.1f}초를 소모했습니다.")
+        logger.info(f"⏳ 정확한 30분 주기 유지를 위해 남은 {remaining_sleep_time:.1f}초 동안 대기합니다...")
+        
+        time.sleep(remaining_sleep_time)
 
 if __name__ == "__main__":
     try:
