@@ -292,7 +292,7 @@ def run_bot():
                 
                 if tp_price > current_price:
                     # 숏 포지션 물량만큼은 남기고 익절하도록 안전 수량(safe_tp_qty) 계산
-                    safe_tp_qty_raw = (long_contracts + order_qty) - short_contracts
+                    safe_tp_qty_raw = long_contracts - short_contracts
                     
                     if safe_tp_qty_raw > 0:
                         safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
