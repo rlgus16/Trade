@@ -217,11 +217,11 @@ def run_bot():
             amount_usdt = float(signal.get('amt', 0))
             
             # 진입가(ep) 및 익절가(tp) 받아오기
-            order_price_raw = float(signal.get('ep', current_price))
+            order_price_raw = float(signal.get('ep') or current_price)
             if order_price_raw <= 0:
                 order_price_raw = current_price
                 
-            tp_price_raw = float(signal.get('tp', 0.0))
+            tp_price_raw = float(signal.get('tp') or 0.0)
             reason = signal.get('rsn')
             
             logger.info(f"🔔 시그널: {action} | 진입 지정가: {order_price_raw} | 목표가(TP): {tp_price_raw} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
@@ -342,6 +342,12 @@ def run_bot():
                         
                         logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
                         exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
+                        
+                        # 부분 청산일 경우 남은 잔여 물량에 대해 방패(TP) 다시 세우기
+                        remaining_qty = long_contracts - final_close_qty
+                        if remaining_qty > 0 and tp_price > current_price:
+                            logger.info(f"🎯 롱 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
+                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', remaining_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
                 else:
                     logger.warning("⛔ 보유 중인 롱 포지션이 없어 청산 불가.")
 
@@ -361,6 +367,12 @@ def run_bot():
                     
                     logger.info(f"✅ 숏 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
                     exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
+                    
+                    # 부분 청산일 경우 남은 잔여 물량에 대해 방패 다시 세우기
+                    remaining_qty = short_contracts - final_close_qty
+                    if remaining_qty > 0 and tp_price > 0 and tp_price < current_price:
+                        logger.info(f"🎯 숏 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', remaining_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
                 else:
                     logger.warning("⛔ 보유 중인 숏 포지션이 없어 청산 불가.")
 
