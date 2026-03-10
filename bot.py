@@ -291,13 +291,24 @@ def run_bot():
                 exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 
                 if tp_price > current_price:
-                    logger.info(f"🎯 롱 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
-                    # 수량을 None으로 변경
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', None, params={
-                        'positionSide': 'LONG', 
-                        'stopPrice': tp_price,
-                        'closePosition': True
-                    })
+                    # 숏 포지션 물량만큼은 남기고 익절하도록 안전 수량(safe_tp_qty) 계산
+                    safe_tp_qty_raw = (long_contracts + order_qty) - short_contracts
+                    
+                    if safe_tp_qty_raw > 0:
+                        safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
+                        
+                        # 바이낸스 최소 주문 한도(5 USDT) 검사
+                        if safe_tp_qty * tp_price >= 5.0:
+                            logger.info(f"🎯 롱 포지션 부분 익절(TP) 설정 (목표가: {tp_price} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
+                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                'positionSide': 'LONG', 
+                                'stopPrice': tp_price
+                                # closePosition: True를 빼고 명확한 수량을 지정합니다.
+                            })
+                        else:
+                            logger.warning("🛡️ 롱 TP 보류: 숏을 제외한 익절 가능 물량이 최소 주문 금액(5 USDT) 미만입니다.")
+                    else:
+                        logger.warning("🛡️ 롱 TP 보류: 숏 물량 보호를 위해 당장 롱 포지션을 익절할 수 없습니다.")
                     
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
@@ -305,11 +316,10 @@ def run_bot():
                 
                 if tp_price > 0 and tp_price < current_price:
                     logger.info(f"🎯 숏 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
-                    # 수량을 None으로 변경
                     exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                         'positionSide': 'SHORT', 
                         'stopPrice': tp_price,
-                        'closePosition': True
+                        'closePosition': True # 숏은 다 팔려도 롱보다 작아지므로 전량 청산 유지
                     })
             
             else:
@@ -317,16 +327,25 @@ def run_bot():
                 
                 if tp_price > 0:
                     if long_contracts > 0 and tp_price > current_price:
-                        logger.info(f"🎯 기존 롱 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        # 수량을 None으로 변경
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', None, params={
-                            'positionSide': 'LONG', 
-                            'stopPrice': tp_price,
-                            'closePosition': True
-                        })
+                        # 기존 롱 물량에서도 숏 물량을 뺀 만큼만 갱신
+                        safe_tp_qty_raw = long_contracts - short_contracts
+                        
+                        if safe_tp_qty_raw > 0:
+                            safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
+                            
+                            if safe_tp_qty * tp_price >= 5.0:
+                                logger.info(f"🎯 기존 롱 포지션 부분 익절(TP) 갱신 (목표가: {tp_price} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
+                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                    'positionSide': 'LONG', 
+                                    'stopPrice': tp_price
+                                })
+                            else:
+                                logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏을 제외한 익절 가능 물량이 최소 주문 금액(5 USDT) 미만입니다.")
+                        else:
+                            logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏 물량 보호를 위해 현재 롱 포지션을 익절할 수 없습니다.")
+
                     if short_contracts > 0 and tp_price < current_price:
                         logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        # 수량을 None으로 변경
                         exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                             'positionSide': 'SHORT', 
                             'stopPrice': tp_price,
