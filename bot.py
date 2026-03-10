@@ -146,14 +146,16 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     3. The total long_position_size must not exceed 2000 USDT.
     4. Short_size must never exceed long_size at all times.
     5. Thoroughly analyze the provided technical indicators to identify trends.
-    6. If free_balance is abundant, do not hedge out of panic.
-    7. Open both LONG and SHORT position to maximize profit.
-    8. Use CLOSE_LONG or CLOSE_SHORT actions to realize profit.
-    9. Predict and place specific limit_order_prices for entries and exits to maximize profit.
+    6. Do not hedge if free_balance is abundant.
+    7. Focus on maximizing profit, rather than hedging.
+    8. Open both LONG and SHORT position to maximize profit.
+    9. Use CLOSE_LONG or CLOSE_SHORT actions to realize profit.
+    10. Predict and place specific limit_order_prices for entries. 
+    11. Predict and place take_profit_prices upon new entries.
     
     Respond ONLY in this JSON:
-    {"act": "L"|"S"|"CL"|"CS"|"H", "tp": <price>, "amt": <usdt>, "rsn": "<reasoning>"}
-    (L:LONG, S:SHORT, CL:CLOSE_LONG, CS:CLOSE_SHORT, H:HOLD)
+    {"act": "L"|"S"|"CL"|"CS"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
+    (L:LONG, S:SHORT, CL:CLOSE_LONG, CS:CLOSE_SHORT, H:HOLD. Use 'ep' for limit entry/close price, and 'tp' for take profit price when entering.)
     """
     
     prompt = f"""
@@ -194,8 +196,15 @@ def run_bot():
             logger.info("="*50)
             
             try:
-                exchange.cancel_all_orders(SYMBOL)
-                logger.info(f"🧹 {SYMBOL} 미체결 주문 정리 완료")
+                # 일반 진입 지정가(limit) 주문만 취소하고 Take Profit 주문은 유지합니다.
+                open_orders = exchange.fetch_open_orders(SYMBOL)
+                cancel_count = 0
+                for order in open_orders:
+                    if order['type'] == 'limit':
+                        exchange.cancel_order(order['id'], SYMBOL)
+                        cancel_count += 1
+                if cancel_count > 0:
+                    logger.info(f"🧹 {SYMBOL} 미체결 진입 주문 {cancel_count}건 정리 완료 (TP 주문 유지)")
             except Exception as e:
                 logger.warning(f"⚠️ 미체결 주문 취소 중 오류 (무시 가능): {e}")
 
@@ -212,14 +221,15 @@ def run_bot():
             action = action_map.get(signal.get('act'), "HOLD")
             amount_usdt = float(signal.get('amt', 0))
             
-            # tp(target_price) 받아오기
-            target_price = float(signal.get('tp', current_price))
-            if target_price <= 0:
-                target_price = current_price
+            # 진입가(ep) 및 익절가(tp) 받아오기
+            order_price_raw = float(signal.get('ep', current_price))
+            if order_price_raw <= 0:
+                order_price_raw = current_price
                 
+            tp_price_raw = float(signal.get('tp', 0.0))
             reason = signal.get('rsn')
             
-            logger.info(f"🔔 시그널: {action} | 목표 지정가: {target_price} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
+            logger.info(f"🔔 시그널: {action} | 진입 지정가: {order_price_raw} | 목표가(TP): {tp_price_raw} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
             
             # ==========================================
             # 💡 1차 방어: 신규 진입 시 '전면 거절' 대신 '부분 진입(금액 축소)'으로 유연성 확보
@@ -266,16 +276,18 @@ def run_bot():
             # ==========================================
             # 💡 조절이 완료된 최종 금액으로 수량(qty) 및 가격(price) 정밀도 계산
             # ==========================================
-            raw_order_qty = amount_usdt / target_price if target_price > 0 else 0
+            raw_order_qty = amount_usdt / order_price_raw if order_price_raw > 0 else 0
             
             if amount_usdt > 0:
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
-                order_price_str = exchange.price_to_precision(SYMBOL, target_price)
+                order_price_str = exchange.price_to_precision(SYMBOL, order_price_raw)
                 order_price = float(order_price_str)
+                tp_price = float(exchange.price_to_precision(SYMBOL, tp_price_raw)) if tp_price_raw > 0 else 0.0
             else:
                 order_qty = 0.0
                 order_price = 0.0
+                tp_price = 0.0
             
             # ==========================================
             # 💡 실제 주문 실행부
@@ -283,10 +295,20 @@ def run_bot():
             if action == "LONG" and amount_usdt > 0:
                 logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
+                
+                # Take Profit 주문 추가 (롱: 목표가가 진입가보다 높을 때만)
+                if tp_price > order_price:
+                    logger.info(f"🎯 롱 포지션 익절(TP) 예약 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', order_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
                     
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
+                
+                # Take Profit 주문 추가 (숏: 목표가가 진입가보다 낮을 때만)
+                if tp_price > 0 and tp_price < order_price:
+                    logger.info(f"🎯 숏 포지션 익절(TP) 예약 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', order_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
             
             # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
             elif action == "CLOSE_LONG" and amount_usdt > 0:
