@@ -214,7 +214,7 @@ def run_bot():
             
             action_map = {"L": "LONG", "S": "SHORT", "CL": "CLOSE_LONG", "CS": "CLOSE_SHORT", "H": "HOLD"}
             action = action_map.get(signal.get('act'), "HOLD")
-            amount_usdt = float(signal.get('amt', 0))
+            amount_usdt = float(signal.get('amt') or 0.0)
             
             # 진입가(ep) 및 익절가(tp) 받아오기
             order_price_raw = float(signal.get('ep') or current_price)
@@ -344,7 +344,8 @@ def run_bot():
                         exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
                         
                         # 부분 청산일 경우 남은 잔여 물량에 대해 방패(TP) 다시 세우기
-                        remaining_qty = long_contracts - final_close_qty
+                        raw_remaining_qty = long_contracts - final_close_qty
+                        remaining_qty = float(exchange.amount_to_precision(SYMBOL, raw_remaining_qty))
                         if remaining_qty > 0 and tp_price > current_price:
                             logger.info(f"🎯 롱 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
                             exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', remaining_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
@@ -369,7 +370,8 @@ def run_bot():
                     exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
                     
                     # 부분 청산일 경우 남은 잔여 물량에 대해 방패 다시 세우기
-                    remaining_qty = short_contracts - final_close_qty
+                    raw_remaining_qty = short_contracts - final_close_qty
+                    remaining_qty = float(exchange.amount_to_precision(SYMBOL, raw_remaining_qty))
                     if remaining_qty > 0 and tp_price > 0 and tp_price < current_price:
                         logger.info(f"🎯 숏 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
                         exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', remaining_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
