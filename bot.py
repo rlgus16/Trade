@@ -149,8 +149,8 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     6. Do not hedge if free_balance is abundant. Focus on maximizing profit.
     7. Open LONG and SHORT positions to maximize profit.
     8. Exits should rely on take_profit_orders hitting their targets.
-    9. Predict and place limit_order for entries. 
-    10. Predict and place take_profit_order for open positions.
+    9. Predict and place limit_order for entries.
+    10. Always predict and place take_profit_order for open positions, even if your act is HOLD.
     
     Respond ONLY in this JSON:
     {"act": "L"|"S"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
@@ -290,10 +290,10 @@ def run_bot():
                 logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 
-                # 신규/기존 구분 없이 closePosition=True 로 롱 포지션 전체 익절 예약
                 if tp_price > current_price:
                     logger.info(f"🎯 롱 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', order_qty, params={
+                    # 수량을 None으로 변경
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', None, params={
                         'positionSide': 'LONG', 
                         'stopPrice': tp_price,
                         'closePosition': True
@@ -303,10 +303,10 @@ def run_bot():
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 
-                # 신규/기존 구분 없이 closePosition=True 로 숏 포지션 전체 익절 예약
                 if tp_price > 0 and tp_price < current_price:
                     logger.info(f"🎯 숏 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', order_qty, params={
+                    # 수량을 None으로 변경
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                         'positionSide': 'SHORT', 
                         'stopPrice': tp_price,
                         'closePosition': True
@@ -315,18 +315,19 @@ def run_bot():
             else:
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
                 
-                # 관망 중이더라도 보유 포지션이 있고 유효한 tp가 있다면 TP 주문 갱신
                 if tp_price > 0:
                     if long_contracts > 0 and tp_price > current_price:
                         logger.info(f"🎯 기존 롱 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={
+                        # 수량을 None으로 변경
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', None, params={
                             'positionSide': 'LONG', 
                             'stopPrice': tp_price,
                             'closePosition': True
                         })
                     if short_contracts > 0 and tp_price < current_price:
                         logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={
+                        # 수량을 None으로 변경
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                             'positionSide': 'SHORT', 
                             'stopPrice': tp_price,
                             'closePosition': True
