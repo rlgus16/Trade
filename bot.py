@@ -143,20 +143,18 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     system_instruction = """
     1. NEVER execute a STOP_LOSS.
     2. You can average_down to maximize profit.
-    3. The total long_position_size must not exceed 2000 USDT.
+    3. The total long_size must not exceed 2000 USDT.
     4. Short_size must never exceed long_size at all times.
     5. Thoroughly analyze the provided technical indicators to identify trends.
-    6. Do not hedge if free_balance is abundant.
-    7. Focus on maximizing profit, rather than hedging.
-    8. Open both LONG and SHORT position to maximize profit.
-    9. CLOSE_LONG or CLOSE_SHORT to realize profit.
-    10. Predict and place specific limit_order_prices for entries. 
-    11. Predict and place take_profit_orders for open positions.
-    12. Instead of HOLDING, place take_profit_orders to maximize profit.
+    6. Do not hedge if free_balance is abundant. Focus on maximizing profit.
+    7. Open LONG and SHORT positions to maximize profit.
+    8. Exits should rely on take_profit_orders hitting their targets.
+    9. Predict and place limit_order for entries. 
+    10. Predict and place take_profit_order for open positions.
     
     Respond ONLY in this JSON:
-    {"act": "L"|"S"|"CL"|"CS"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
-    (L:LONG, S:SHORT, CL:CLOSE_LONG, CS:CLOSE_SHORT, H:HOLD. Use 'ep' for limit entry/close price, and 'tp' for take profit price when entering.)
+    {"act": "L"|"S"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
+    (L:LONG, S:SHORT, H:HOLD. Use 'ep' for limit entry price, and 'tp' for take profit price.)
     """
     
     prompt = f"""
