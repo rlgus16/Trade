@@ -128,7 +128,7 @@ def get_market_data():
     recent_data = []
     for _, row in df.tail(6).iterrows():
         recent_data.append({
-            "t": str(row['timestamp'])[-8:], # 시각만 추출
+            "t": str(row['timestamp'])[-8:],
             "o": row['open'], "h": row['high'], "l": row['low'], "c": row['close'], "v": row['volume'],
             "rsi": row[rsi_col], "m": row[macd_col], "ms": row[macds_col],
             "bb_u": row[bbu_col], "bb_l": row[bbl_col], "sma": row[sma_col]
@@ -141,14 +141,15 @@ def get_market_data():
 # ==========================================
 def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate):
     system_instruction = """
-    1. NEVER execute a Stop-Loss under any circumstances. (Respond by averaging down / scaling in).
-    2. The total LONG position size must not exceed 2000 USDT.
-    3. The total SHORT position size must not exceed your current LONG position size.
-    4. Thoroughly analyze the provided technical indicators (RSI, MACD, Bollinger Bands, Moving Averages) to identify trends and overbought/oversold zones.
-    5. Smartly calculate optimal entry points for averaging down and hedging times based on the current Unrealized PnL and Funding Rate.
-    6. When closing a LONG position (CLOSE_LONG), the remaining LONG position size must NEVER be smaller than the SHORT position size. (Maintaining this hedge is mandatory to prevent infinite losses from the SHORT position).
-    7. When profit realization is needed, use the CLOSE_LONG or CLOSE_SHORT actions to close the corresponding positions.
-    8. Predict a specific target price to place a Limit order. For entries (LONG/SHORT), analyze support/resistance levels to set an ambush (waiting) price. For exits, set a target profit price. If immediate execution is advantageous, set it close to the current price.
+    1. NEVER execute a STOP_LOSS.
+    2. You can average_down to maximize profit.
+    3. The total long_position_size must not exceed 2000 USDT.
+    4. Short_size must never exceed long_size at all times.
+    5. Thoroughly analyze the provided technical indicators to identify trends.
+    6. If free_balance is abundant, do not hedge out of panic.
+    7. Open both LONG and SHORT position to maximize profit.
+    8. Use CLOSE_LONG or CLOSE_SHORT actions to realize profit.
+    9. Predict and place specific limit_order_prices for entries and exits to maximize profit.
     
     Respond ONLY in this JSON:
     {"act": "L"|"S"|"CL"|"CS"|"H", "tp": <price>, "amt": <usdt>, "rsn": "<reasoning>"}
