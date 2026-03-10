@@ -210,7 +210,8 @@ def run_bot():
             logger.info("🧠 Gemini 3.1 Pro-preview 분석 중...")
             signal = get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, current_price, recent_data, funding_rate)
             
-            action_map = {"L": "LONG", "S": "SHORT", "CL": "CLOSE_LONG", "CS": "CLOSE_SHORT", "H": "HOLD"}
+            # 사용하지 않는 CL(CLOSE_LONG), CS(CLOSE_SHORT) 삭제
+            action_map = {"L": "LONG", "S": "SHORT", "H": "HOLD"}
             action = action_map.get(signal.get('act'), "HOLD")
             amount_usdt = float(signal.get('amt') or 0.0)
             
@@ -259,8 +260,8 @@ def run_bot():
                         logger.warning("⛔ 가용 잔고가 너무 부족하여 진입할 수 없습니다. 관망(HOLD) 전환.")
                         action = "HOLD"; amount_usdt = 0.0
 
-            # 🛡️ 3차 방어: 바이낸스 최소 주문 금액 (5 USDT) 1차 공통 확인
-            if action in ["LONG", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"] and amount_usdt > 0:
+            # 🛡️ 3차 방어: 바이낸스 최소 주문 금액 (5 USDT) 1차 공통 확인 (CLOSE 액션 삭제됨)
+            if action in ["LONG", "SHORT"] and amount_usdt > 0:
                 if amount_usdt < 5.0:
                     logger.warning(f"🛡️ 최종 요청 금액({amount_usdt:.2f} USDT)이 바이낸스 최소 한도 미만입니다. 관망(HOLD) 전환.")
                     action = "HOLD"
@@ -283,99 +284,34 @@ def run_bot():
                 tp_price = 0.0
             
             # ==========================================
-            # 💡 실제 주문 실행부
+            # 💡 실제 주문 실행부 (TP 전용 전략으로 수정)
             # ==========================================
             if action == "LONG" and amount_usdt > 0:
                 logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 
-                # 신규 진입 물량에 대한 TP 예약
-                if tp_price > order_price:
-                    logger.info(f"🎯 신규 롱 진입 익절(TP) 예약 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', order_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
-                
-                # 기존 롱 포지션이 있다면 기존 물량에 대해서도 새 TP 재설정
-                if long_contracts > 0 and tp_price > current_price:
-                    logger.info(f"🎯 기존 롱 포지션 익절(TP) 재설정 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={'positionSide': 'LONG', 'stopPrice': tp_price})
+                # 신규/기존 구분 없이 closePosition=True 로 롱 포지션 전체 익절 예약
+                if tp_price > current_price:
+                    logger.info(f"🎯 롱 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', order_qty, params={
+                        'positionSide': 'LONG', 
+                        'stopPrice': tp_price,
+                        'closePosition': True
+                    })
                     
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 
-                # 신규 진입 물량에 대한 TP 예약
-                if tp_price > 0 and tp_price < order_price:
-                    logger.info(f"🎯 신규 숏 진입 익절(TP) 예약 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', order_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
-                    
-                # 기존 숏 포지션이 있다면 기존 물량에 대해서도 새 TP 재설정
-                if short_contracts > 0 and tp_price > 0 and tp_price < current_price:
-                    logger.info(f"🎯 기존 숏 포지션 익절(TP) 재설정 (목표가: {tp_price} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
+                # 신규/기존 구분 없이 closePosition=True 로 숏 포지션 전체 익절 예약
+                if tp_price > 0 and tp_price < current_price:
+                    logger.info(f"🎯 숏 포지션 전체 익절(TP) 설정 (목표가: {tp_price} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', order_qty, params={
+                        'positionSide': 'SHORT', 
+                        'stopPrice': tp_price,
+                        'closePosition': True
+                    })
             
-            # 💡 롱 포지션 수익 실현/청산 (지정가 매도) + 방패 붕괴 방지(안전장치 4)
-            elif action == "CLOSE_LONG" and amount_usdt > 0:
-                if long_size > 0:
-                    if (long_size - amount_usdt) < short_size:
-                        logger.warning(f"🛡️ 헤지 방어 작동: 롱 청산 후 남은 롱이 숏({short_size} USDT)보다 적어집니다! 숏 노출 위험으로 청산 금액을 축소합니다.")
-                        amount_usdt = long_size - short_size 
-                        
-                    # 축소된 청산 금액이 바이낸스 최소 주문 한도(5 USDT) 미만이 되어버렸는지 2차 검사
-                    if amount_usdt > 0 and amount_usdt < 5.0:
-                        logger.warning("⛔ 방어 로직으로 축소된 청산 금액이 5 USDT 미만이 되어, 바이낸스 최소 한도 에러를 방지하기 위해 청산을 취소합니다.")
-                        
-                    elif amount_usdt <= 0:
-                        logger.warning("⛔ 숏 포지션 방어를 위해 롱 포지션을 더 이상 청산할 수 없습니다. (숏 포지션을 먼저 청산해야 합니다)")
-                    else:
-                        # 전량 청산 의도시 먼지(Dust) 방지
-                        if amount_usdt >= long_size * 0.99:
-                            logger.info("🧹 전량 청산: 잔류 방지를 위해 보유 롱 수량 전체를 매도합니다.")
-                            actual_close_qty = long_contracts
-                        else:
-                            raw_close_qty = amount_usdt / long_price
-                            actual_close_qty = min(raw_close_qty, long_contracts)
-                        
-                        close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
-                        final_close_qty = float(close_qty_str)
-                        
-                        logger.info(f"✅ 롱 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
-                        exchange.create_order(SYMBOL, 'limit', 'sell', final_close_qty, order_price, params={'positionSide': 'LONG'})
-                        
-                        # 부분 청산일 경우 남은 잔여 물량에 대해 방패(TP) 다시 세우기
-                        raw_remaining_qty = long_contracts - final_close_qty
-                        remaining_qty = float(exchange.amount_to_precision(SYMBOL, raw_remaining_qty))
-                        if remaining_qty > 0 and tp_price > current_price:
-                            logger.info(f"🎯 롱 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', remaining_qty, params={'positionSide': 'LONG', 'stopPrice': tp_price})
-                else:
-                    logger.warning("⛔ 보유 중인 롱 포지션이 없어 청산 불가.")
-
-            # 💡 숏 포지션 수익 실현/청산 (지정가 매수)
-            elif action == "CLOSE_SHORT" and amount_usdt > 0:
-                if short_size > 0:
-                    # 전량 청산 의도시 먼지(Dust) 방지
-                    if amount_usdt >= short_size * 0.99:
-                        logger.info("🧹 전량 청산: 잔류 방지를 위해 보유 숏 수량 전체를 매수합니다.")
-                        actual_close_qty = short_contracts
-                    else:
-                        raw_close_qty = amount_usdt / short_price
-                        actual_close_qty = min(raw_close_qty, short_contracts)
-                    
-                    close_qty_str = exchange.amount_to_precision(SYMBOL, actual_close_qty)
-                    final_close_qty = float(close_qty_str)
-                    
-                    logger.info(f"✅ 숏 포지션 청산 (수량: {final_close_qty} LTC | 지정가: {order_price} USDT)")
-                    exchange.create_order(SYMBOL, 'limit', 'buy', final_close_qty, order_price, params={'positionSide': 'SHORT'})
-                    
-                    # 부분 청산일 경우 남은 잔여 물량에 대해 방패 다시 세우기
-                    raw_remaining_qty = short_contracts - final_close_qty
-                    remaining_qty = float(exchange.amount_to_precision(SYMBOL, raw_remaining_qty))
-                    if remaining_qty > 0 and tp_price > 0 and tp_price < current_price:
-                        logger.info(f"🎯 숏 부분 청산 후 남은 잔여 물량 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', remaining_qty, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
-                else:
-                    logger.warning("⛔ 보유 중인 숏 포지션이 없어 청산 불가.")
-
             else:
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
                 
@@ -383,10 +319,18 @@ def run_bot():
                 if tp_price > 0:
                     if long_contracts > 0 and tp_price > current_price:
                         logger.info(f"🎯 기존 롱 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={'positionSide': 'LONG', 'stopPrice': tp_price})
-                    elif short_contracts > 0 and tp_price < current_price:
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', long_contracts, params={
+                            'positionSide': 'LONG', 
+                            'stopPrice': tp_price,
+                            'closePosition': True
+                        })
+                    if short_contracts > 0 and tp_price < current_price:
                         logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={'positionSide': 'SHORT', 'stopPrice': tp_price})
+                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', short_contracts, params={
+                            'positionSide': 'SHORT', 
+                            'stopPrice': tp_price,
+                            'closePosition': True
+                        })
 
         except Exception as e:
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
@@ -394,7 +338,7 @@ def run_bot():
             time.sleep(600)
             continue 
             
-        time.sleep(1800) 
+        time.sleep(1800)
 
 if __name__ == "__main__":
     try:
