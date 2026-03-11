@@ -296,24 +296,34 @@ def run_bot():
             # 신규 진입 여부와 무관하게, 루프 시작 시 지워진 기존 TP를 즉시 복구하여 
             # 10분 대기 시간 동안 포지션이 무방비로 방치되는 것을 원천 차단
             # ==========================================
-            if long_contracts > 0 and tp_price_l > current_price:
+            if long_contracts > 0 and tp_price_l > 0:
                 safe_tp_qty_raw = long_contracts - short_contracts
                 if safe_tp_qty_raw > 0:
                     safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                     if safe_tp_qty * tp_price_l >= 5.0:
-                        logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_l} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                            'positionSide': 'LONG', 
-                            'stopPrice': tp_price_l
-                        })
+                        if tp_price_l > current_price:
+                            logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_l} USDT)")
+                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                'positionSide': 'LONG', 
+                                'stopPrice': tp_price_l
+                            })
+                        else:
+                            # 자는 동안 돌파했거나, AI가 타점을 낮춘 경우 즉시 시장가 익절!
+                            logger.warning(f"🚨 현재 가격({current_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
+                            exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
 
-            if short_contracts > 0 and tp_price_s > 0 and tp_price_s < current_price:
-                logger.info(f"🛡️ 기존 숏 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_s} USDT)")
-                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
-                    'positionSide': 'SHORT', 
-                    'stopPrice': tp_price_s,
-                    'closePosition': True
-                })
+            if short_contracts > 0 and tp_price_s > 0:
+                if tp_price_s < current_price:
+                    logger.info(f"🛡️ 기존 숏 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_s} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
+                        'positionSide': 'SHORT', 
+                        'stopPrice': tp_price_s,
+                        'closePosition': True
+                    })
+                else:
+                    # 숏 역시 이미 수익 구간(목표가 아래)이라면 즉시 시장가 익절!
+                    logger.warning(f"🚨 현재 가격({current_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
+                    exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
 
             # ==========================================
             # 💡 실제 주문 실행부 (TP 전용 전략)
