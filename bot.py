@@ -325,20 +325,29 @@ def run_bot():
                     short_contracts = 0.0  # 숏이 청산되었으므로 변수를 0으로 동기화!
 
             if long_contracts > 0 and tp_price_l > 0:
-                # 이제 short_contracts가 정확하게 동기화된 상태에서 안전하게 계산됩니다.
                 safe_tp_qty_raw = long_contracts - short_contracts
                 if safe_tp_qty_raw > 0:
                     safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                     if safe_tp_qty * tp_price_l >= 5.0:
-                        if tp_price_l > live_price:
-                            logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_l} USDT)")
-                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                'positionSide': 'LONG', 
-                                'stopPrice': tp_price_l
-                            })
+                        
+                        # 숏이 없으면 먼지(Dust) 방지를 위해 closePosition으로 100% 청산!
+                        if short_contracts == 0:
+                            tp_qty = None
+                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                            mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                            mode_str = "전체 청산 모드로"
                         else:
-                            logger.warning(f"🚨 현재 가격({live_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 익절합니다.")
-                            exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
+                            tp_qty = safe_tp_qty
+                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                            mkt_params = {'positionSide': 'LONG'}
+                            mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+
+                        if tp_price_l > live_price:
+                            logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) {mode_str} 복구 완료 (목표가: {tp_price_l} USDT)")
+                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
+                        else:
+                            logger.warning(f"🚨 현재 가격({live_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 {mode_str} 시장가 익절합니다.")
+                            exchange.create_order(SYMBOL, 'MARKET', 'sell', tp_qty, params=mkt_params)
                             
                             logger.warning("🛡️ 시장가 익절로 계좌 상태가 급변했습니다! 이번 턴 신규 진입을 취소합니다.")
                             action = "HOLD"
@@ -399,15 +408,25 @@ def run_bot():
                         if safe_tp_qty_raw > 0:
                             safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                             if safe_tp_qty * tp_price_l >= 5.0:
-                                if tp_price_l > latest_price:
-                                    logger.info(f"🎯 최종 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT | 수량: {safe_tp_qty} LTC)")
-                                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                        'positionSide': 'LONG', 
-                                        'stopPrice': tp_price_l
-                                    })
+                                
+                                # 파라미터 동적 스위칭
+                                if new_short_contracts == 0:
+                                    tp_qty = None
+                                    tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                                    mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                                    mode_str = "전체 청산 모드로"
                                 else:
-                                    logger.warning(f"🚨 체결 직후 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 달달하게 익절합니다.")
-                                    exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
+                                    tp_qty = safe_tp_qty
+                                    tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                                    mkt_params = {'positionSide': 'LONG'}
+                                    mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+
+                                if tp_price_l > latest_price:
+                                    logger.info(f"🎯 최종 롱 포지션 익절(TP) {mode_str} 재설정 (목표가: {tp_price_l} USDT)")
+                                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
+                                else:
+                                    logger.warning(f"🚨 체결 직후 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 {mode_str} 시장가 익절합니다.")
+                                    exchange.create_order(SYMBOL, 'MARKET', 'sell', tp_qty, params=mkt_params)
                 
                 else:
                     logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
@@ -462,15 +481,25 @@ def run_bot():
                     if safe_tp_qty_raw > 0 and tp_price_l > 0:
                         safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                         if safe_tp_qty * tp_price_l >= 5.0:
-                            if tp_price_l > latest_price:
-                                logger.info(f"🎯 기존 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT)")
-                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                    'positionSide': 'LONG', 
-                                    'stopPrice': tp_price_l
-                                })
+                            
+                            # 파라미터 동적 스위칭
+                            if new_short_contracts == 0:
+                                tp_qty = None
+                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                                mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                                mode_str = "전체 청산 모드로"
                             else:
-                                logger.warning(f"🚨 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 익절합니다.")
-                                exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
+                                tp_qty = safe_tp_qty
+                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                                mkt_params = {'positionSide': 'LONG'}
+                                mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+
+                            if tp_price_l > latest_price:
+                                logger.info(f"🎯 기존 롱 포지션 익절(TP) {mode_str} 재설정 (목표가: {tp_price_l} USDT)")
+                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
+                            else:
+                                logger.warning(f"🚨 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 {mode_str} 시장가 익절합니다.")
+                                exchange.create_order(SYMBOL, 'MARKET', 'sell', tp_qty, params=mkt_params)
 
                 else:
                     logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
