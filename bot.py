@@ -347,27 +347,39 @@ def run_bot():
                         
                         _, _, _, _, _, _, _, new_long_contracts, new_short_contracts = get_account_state()
                         
+                        # 10분 사이 가격이 급변했을 수 있으므로 최신 가격 실시간 조회
+                        latest_ticker = exchange.fetch_ticker(SYMBOL)
+                        latest_price = latest_ticker['last']
+                        
                         # 1. 늘어난 수량으로 롱 TP 재설정
                         safe_tp_qty_raw = new_long_contracts - new_short_contracts
                         if safe_tp_qty_raw > 0:
                             safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                             if safe_tp_qty * tp_price_l >= 5.0:
-                                logger.info(f"🎯 최종 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT | 수량: {safe_tp_qty} LTC)")
-                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                    'positionSide': 'LONG', 
-                                    'stopPrice': tp_price_l
-                                })
+                                if tp_price_l > latest_price:
+                                    # 정상적으로 아직 도달 안 한 경우 -> TP 방패 설정
+                                    logger.info(f"🎯 최종 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT | 수량: {safe_tp_qty} LTC)")
+                                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                        'positionSide': 'LONG', 
+                                        'stopPrice': tp_price_l
+                                    })
+                                else:
+                                    # 빔을 쏴서 이미 목표가를 넘어선 경우 -> 즉시 시장가 익절!
+                                    logger.warning(f"🚨 체결 직후 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 달달하게 익절합니다.")
+                                    exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
                         
                         # 2. 지워진 숏 TP 다시 복구
-                        if new_short_contracts > 0 and tp_price_s > 0 and tp_price_s < current_price:
-                            logger.info(f"🎯 기존 숏 포지션 익절(TP) 재설정 (목표가: {tp_price_s} USDT)")
-                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
-                                'positionSide': 'SHORT', 
-                                'stopPrice': tp_price_s,
-                                'closePosition': True
-                            })
-                    else:
-                        logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
+                        if new_short_contracts > 0 and tp_price_s > 0:
+                            if tp_price_s < latest_price:
+                                logger.info(f"🎯 기존 숏 포지션 익절(TP) 재설정 (목표가: {tp_price_s} USDT)")
+                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
+                                    'positionSide': 'SHORT', 
+                                    'stopPrice': tp_price_s,
+                                    'closePosition': True
+                                })
+                            else:
+                                logger.warning(f"🚨 가격({latest_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 즉시 시장가로 익절합니다.")
+                                exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
                     
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
@@ -398,27 +410,37 @@ def run_bot():
                         
                         _, _, _, _, _, _, _, new_long_contracts, new_short_contracts = get_account_state()
                         
+                        # 최신 가격 실시간 조회
+                        latest_ticker = exchange.fetch_ticker(SYMBOL)
+                        latest_price = latest_ticker['last']
+                        
                         # 1. 숏 TP 전체 재설정
-                        if new_short_contracts > 0 and tp_price_s > 0 and tp_price_s < current_price:
-                            logger.info(f"🎯 최종 숏 포지션 익절(TP) 재설정 (목표가: {tp_price_s} USDT)")
-                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
-                                'positionSide': 'SHORT', 
-                                'stopPrice': tp_price_s,
-                                'closePosition': True
-                            })
+                        if new_short_contracts > 0 and tp_price_s > 0:
+                            if tp_price_s < latest_price:
+                                logger.info(f"🎯 최종 숏 포지션 익절(TP) 재설정 (목표가: {tp_price_s} USDT)")
+                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
+                                    'positionSide': 'SHORT', 
+                                    'stopPrice': tp_price_s,
+                                    'closePosition': True
+                                })
+                            else:
+                                logger.warning(f"🚨 체결 직후 가격({latest_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 즉시 시장가로 익절합니다.")
+                                exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
                         
                         # 2. 지워진 롱 TP 다시 복구
                         safe_tp_qty_raw = new_long_contracts - new_short_contracts
-                        if safe_tp_qty_raw > 0 and tp_price_l > current_price:
+                        if safe_tp_qty_raw > 0 and tp_price_l > 0:
                             safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                             if safe_tp_qty * tp_price_l >= 5.0:
-                                logger.info(f"🎯 기존 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT)")
-                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                    'positionSide': 'LONG', 
-                                    'stopPrice': tp_price_l
-                                })
-                    else:
-                        logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
+                                if tp_price_l > latest_price:
+                                    logger.info(f"🎯 기존 롱 포지션 익절(TP) 재설정 (목표가: {tp_price_l} USDT)")
+                                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                        'positionSide': 'LONG', 
+                                        'stopPrice': tp_price_l
+                                    })
+                                else:
+                                    logger.warning(f"🚨 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 익절합니다.")
+                                    exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
             
             else:
                 # 방패는 이미 위에서 세웠으므로 관망 로직은 깔끔해집니다.
