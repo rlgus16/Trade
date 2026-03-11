@@ -234,6 +234,11 @@ def run_bot():
             if (long_contracts > 0 and tp_price_l_raw <= 0) or (short_contracts > 0 and tp_price_s_raw <= 0) or \
                (action == "LONG" and tp_price_l_raw <= 0) or (action == "SHORT" and tp_price_s_raw <= 0):
                 raise ValueError("AI가 유효한 익절가(TP)를 반환하지 않았습니다. 기존 방어막을 유지하며 재시도합니다.")
+            
+            # AI가 분석하는 10초 동안 가격이 변했을 수 있으므로, 
+            # 방패를 지우기 전에 초실시간(Live) 가격을 다시 한번 갱신합니다!
+            live_ticker = exchange.fetch_ticker(SYMBOL)
+            live_price = live_ticker['last']
                 
             try:
                 exchange.cancel_all_orders(SYMBOL)
@@ -244,6 +249,7 @@ def run_bot():
             # ==========================================
             # 💡 1차 방어: 신규 진입 시 '전면 거절' 대신 '부분 진입(금액 축소)'으로 유연성 확보
             # ==========================================
+            # (이 부분의 1, 2, 3차 방어 로직과 정밀도 계산 로직은 기존과 100% 동일하게 유지됩니다)
             if action == "LONG" and amount_usdt > 0:
                 if long_size + amount_usdt > MAX_LONG_USDT:
                     available_space = MAX_LONG_USDT - long_size
@@ -255,7 +261,6 @@ def run_bot():
                         action = "HOLD"; amount_usdt = 0.0
                         
             elif action == "SHORT" and amount_usdt > 0:
-                # 금액(USDT)이 아닌 수량(Contracts) 기준으로 숏 한도를 계산해야 가격 하락 시 Naked Short가 발생하지 않습니다!
                 requested_qty = amount_usdt / order_price_raw if order_price_raw > 0 else 0
                 available_qty = long_contracts - short_contracts
                 
@@ -268,11 +273,10 @@ def run_bot():
                         logger.warning("⛔ 숏 포지션(수량)이 롱 포지션과 동일하여 추가 진입 불가.")
                         action = "HOLD"; amount_usdt = 0.0
 
-            # 🛡️ 2차 방어: 가용 증거금 부족 시에도 전면 거절 대신 '가용 한도 내 최대 진입'
             if action in ["LONG", "SHORT"] and amount_usdt > 0:
                 required_margin = amount_usdt / LEVERAGE
                 if required_margin > free_usdt:
-                    max_possible_usdt = free_usdt * LEVERAGE * 0.95 # 수수료 및 슬리피지 여유분 5% 차감
+                    max_possible_usdt = free_usdt * LEVERAGE * 0.95 
                     if max_possible_usdt >= 5.0:
                         logger.warning(f"🔄 잔고 부족 감지: 요청 금액을 최대 가용 금액({max_possible_usdt:.2f} USDT)으로 축소 진입합니다.")
                         amount_usdt = max_possible_usdt
@@ -280,18 +284,13 @@ def run_bot():
                         logger.warning("⛔ 가용 잔고가 너무 부족하여 진입할 수 없습니다. 관망(HOLD) 전환.")
                         action = "HOLD"; amount_usdt = 0.0
 
-            # 🛡️ 3차 방어: 바이낸스 최소 주문 금액 (5 USDT) 1차 공통 확인 (CLOSE 액션 삭제됨)
             if action in ["LONG", "SHORT"] and amount_usdt > 0:
                 if amount_usdt < 5.0:
                     logger.warning(f"🛡️ 최종 요청 금액({amount_usdt:.2f} USDT)이 바이낸스 최소 한도 미만입니다. 관망(HOLD) 전환.")
                     action = "HOLD"
                     amount_usdt = 0.0
             
-            # ==========================================
-            # 💡 조절이 완료된 최종 금액으로 수량(qty) 및 가격(price) 정밀도 계산
-            # ==========================================
             raw_order_qty = amount_usdt / order_price_raw if order_price_raw > 0 else 0
-            
             if amount_usdt > 0:
                 order_qty_str = exchange.amount_to_precision(SYMBOL, raw_order_qty)
                 order_qty = float(order_qty_str)
@@ -313,23 +312,24 @@ def run_bot():
                 if safe_tp_qty_raw > 0:
                     safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                     if safe_tp_qty * tp_price_l >= 5.0:
-                        if tp_price_l > current_price:
+                        # 낡은 current_price 대신 방금 조회한 live_price 와 비교합니다!
+                        if tp_price_l > live_price:
                             logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_l} USDT)")
                             exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
                                 'positionSide': 'LONG', 
                                 'stopPrice': tp_price_l
                             })
                         else:
-                            logger.warning(f"🚨 현재 가격({current_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
+                            logger.warning(f"🚨 현재 가격({live_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
                             exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
                             
-                            # 롱 물량이 청산되었으므로, 과거 기억에 의존한 위험한 신규 진입을 강제 취소합니다.
                             logger.warning("🛡️ 시장가 익절로 인해 계좌 상태가 급변했습니다! 숏 밸런스 붕괴 방지를 위해 이번 턴 신규 진입을 취소하고 관망(HOLD)합니다.")
                             action = "HOLD"
                             amount_usdt = 0.0
 
             if short_contracts > 0 and tp_price_s > 0:
-                if tp_price_s < current_price:
+                # 낡은 current_price 대신 방금 조회한 live_price 와 비교합니다!
+                if tp_price_s < live_price:
                     logger.info(f"🛡️ 기존 숏 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_s} USDT)")
                     exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                         'positionSide': 'SHORT', 
@@ -337,10 +337,9 @@ def run_bot():
                         'closePosition': True
                     })
                 else:
-                    logger.warning(f"🚨 현재 가격({current_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
+                    logger.warning(f"🚨 현재 가격({live_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
                     exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
                     
-                    # 숏 물량이 청산되었으므로, 오작동 방지를 위해 신규 진입을 강제 취소합니다.
                     logger.warning("🛡️ 시장가 익절로 인해 계좌 상태가 급변했습니다! 안전을 위해 이번 턴 신규 진입을 취소하고 관망(HOLD)합니다.")
                     action = "HOLD"
                     amount_usdt = 0.0
