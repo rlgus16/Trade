@@ -381,6 +381,10 @@ def run_bot():
                                 logger.warning(f"🚨 가격({latest_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 즉시 시장가로 익절합니다.")
                                 exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
                     
+                    # is_filled 가 False 일 때
+                    else:
+                        logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
+                    
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 
@@ -441,6 +445,10 @@ def run_bot():
                                 else:
                                     logger.warning(f"🚨 가격({latest_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 즉시 시장가로 익절합니다.")
                                     exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
+
+                    # is_filled 가 False 일 때
+                    else:
+                        logger.info("⏳ 10분 내에 체결되지 않았습니다. 남은 시간은 대기하며 미체결 상태는 다음 메인 루프에서 감시합니다.")
             
             else:
                 # 방패는 이미 위에서 세웠으므로 관망 로직은 깔끔해집니다.
