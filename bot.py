@@ -328,20 +328,22 @@ def run_bot():
                 safe_tp_qty_raw = long_contracts - short_contracts
                 if safe_tp_qty_raw > 0:
                     safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
-                    if safe_tp_qty * tp_price_l >= 5.0:
-                        
-                        # 숏이 없으면 먼지(Dust) 방지를 위해 closePosition으로 100% 청산!
-                        if short_contracts == 0:
-                            tp_qty = None
-                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
-                            mkt_params = {'positionSide': 'LONG', 'closePosition': True}
-                            mode_str = "전체 청산 모드로"
-                        else:
-                            tp_qty = safe_tp_qty
-                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
-                            mkt_params = {'positionSide': 'LONG'}
-                            mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+                    
+                    # 💡 [핵심 수정] 전체 청산일 때는 5달러 규칙을 무시(True)합니다!
+                    if short_contracts == 0:
+                        is_valid_order = True
+                        tp_qty = None
+                        tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                        mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                        mode_str = "전체 청산 모드로"
+                    else:
+                        is_valid_order = (safe_tp_qty * tp_price_l >= 5.0)
+                        tp_qty = safe_tp_qty
+                        tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                        mkt_params = {'positionSide': 'LONG'}
+                        mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
 
+                    if is_valid_order:
                         if tp_price_l > live_price:
                             logger.info(f"🛡️ 기존 롱 포지션 사전 익절(TP) {mode_str} 복구 완료 (목표가: {tp_price_l} USDT)")
                             exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
@@ -407,20 +409,21 @@ def run_bot():
                         safe_tp_qty_raw = new_long_contracts - new_short_contracts
                         if safe_tp_qty_raw > 0:
                             safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
-                            if safe_tp_qty * tp_price_l >= 5.0:
-                                
-                                # 파라미터 동적 스위칭
-                                if new_short_contracts == 0:
-                                    tp_qty = None
-                                    tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
-                                    mkt_params = {'positionSide': 'LONG', 'closePosition': True}
-                                    mode_str = "전체 청산 모드로"
-                                else:
-                                    tp_qty = safe_tp_qty
-                                    tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
-                                    mkt_params = {'positionSide': 'LONG'}
-                                    mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+                            
+                            if new_short_contracts == 0:
+                                is_valid_order = True
+                                tp_qty = None
+                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                                mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                                mode_str = "전체 청산 모드로"
+                            else:
+                                is_valid_order = (safe_tp_qty * tp_price_l >= 5.0)
+                                tp_qty = safe_tp_qty
+                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                                mkt_params = {'positionSide': 'LONG'}
+                                mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
 
+                            if is_valid_order:
                                 if tp_price_l > latest_price:
                                     logger.info(f"🎯 최종 롱 포지션 익절(TP) {mode_str} 재설정 (목표가: {tp_price_l} USDT)")
                                     exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
@@ -480,20 +483,21 @@ def run_bot():
                     safe_tp_qty_raw = new_long_contracts - new_short_contracts
                     if safe_tp_qty_raw > 0 and tp_price_l > 0:
                         safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
-                        if safe_tp_qty * tp_price_l >= 5.0:
-                            
-                            # 파라미터 동적 스위칭
-                            if new_short_contracts == 0:
-                                tp_qty = None
-                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
-                                mkt_params = {'positionSide': 'LONG', 'closePosition': True}
-                                mode_str = "전체 청산 모드로"
-                            else:
-                                tp_qty = safe_tp_qty
-                                tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
-                                mkt_params = {'positionSide': 'LONG'}
-                                mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
+                        
+                        if new_short_contracts == 0:
+                            is_valid_order = True
+                            tp_qty = None
+                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l, 'closePosition': True}
+                            mkt_params = {'positionSide': 'LONG', 'closePosition': True}
+                            mode_str = "전체 청산 모드로"
+                        else:
+                            is_valid_order = (safe_tp_qty * tp_price_l >= 5.0)
+                            tp_qty = safe_tp_qty
+                            tp_params = {'positionSide': 'LONG', 'stopPrice': tp_price_l}
+                            mkt_params = {'positionSide': 'LONG'}
+                            mode_str = f"부분 청산(수량: {safe_tp_qty} LTC)으로"
 
+                        if is_valid_order:
                             if tp_price_l > latest_price:
                                 logger.info(f"🎯 기존 롱 포지션 익절(TP) {mode_str} 재설정 (목표가: {tp_price_l} USDT)")
                                 exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', tp_qty, params=tp_params)
