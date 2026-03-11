@@ -409,7 +409,7 @@ def run_bot():
                             else:
                                 logger.warning(f"🚨 가격({latest_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 즉시 시장가로 익절합니다.")
                                 exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
-                                new_short_contracts = 0.0  # [중요] 변수 동기화
+                                new_short_contracts = 0.0 # 변수 동기화
                                 
                         # 롱 TP 재설정 (동기화된 숏 수량으로 완벽하게 계산됨)
                         safe_tp_qty_raw = new_long_contracts - new_short_contracts
@@ -473,6 +473,7 @@ def run_bot():
                         else:
                             logger.warning(f"🚨 체결 직후 가격({latest_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 즉시 시장가로 익절합니다.")
                             exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
+                            new_short_contracts = 0.0
                     
                     safe_tp_qty_raw = new_long_contracts - new_short_contracts
                     if safe_tp_qty_raw > 0 and tp_price_l > 0:
