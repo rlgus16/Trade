@@ -299,29 +299,26 @@ def run_bot():
             if action == "LONG" and amount_usdt > 0:
                 logger.info(f"🚀 롱 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 
-                # 1. 주문을 넣고, 해당 주문의 고유 ID를 저장합니다.
                 order = exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 order_id = order['id']
                 
-                if tp_price > order_price:
+                if tp_price_l > order_price:  # tp_price_l 로 변경
                     logger.info("👀 롱 지정가 주문 체결 감시 시작... (5초 간격, 최대 10분 대기)")
                     is_filled = False
                     
-                    # 2. 5초마다 거래소에 물어보는 미니 루프 (최대 120회 = 10분)
                     for _ in range(120):
                         time.sleep(5)
                         try:
                             check_order = exchange.fetch_order(order_id, SYMBOL)
                             if check_order['status'] == 'closed':
                                 is_filled = True
-                                break # 체결 확인! 즉시 루프 탈출
+                                break 
                             elif check_order['status'] in ['canceled', 'rejected', 'expired']:
                                 logger.warning("⚠️ 주문이 취소되거나 거절되어 감시를 종료합니다.")
                                 break
                         except Exception as e:
-                            pass # 네트워크 지연 에러 등은 무시하고 5초 뒤 다시 확인
+                            pass 
                             
-                    # 3. 체결이 확인되었다면, 실시간 계좌 상태를 다시 읽어와서 완벽한 안전 수량으로 TP 설정
                     if is_filled:
                         logger.info("✅ 롱 주문 체결 확인! 즉시 계좌를 스캔하여 안전 방패(TP)를 세웁니다.")
                         _, _, _, _, _, _, _, new_long_contracts, new_short_contracts = get_account_state()
@@ -331,11 +328,11 @@ def run_bot():
                         if safe_tp_qty_raw > 0:
                             safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
                             
-                            if safe_tp_qty * tp_price >= 5.0:
-                                logger.info(f"🎯 롱 포지션 부분 익절(TP) 실시간 설정 완료 (목표가: {tp_price} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
+                            if safe_tp_qty * tp_price_l >= 5.0: # tp_price_l 로 변경
+                                logger.info(f"🎯 롱 포지션 부분 익절(TP) 실시간 설정 완료 (목표가: {tp_price_l} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
                                 exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
                                     'positionSide': 'LONG', 
-                                    'stopPrice': tp_price
+                                    'stopPrice': tp_price_l # tp_price_l 로 변경
                                 })
                             else:
                                 logger.warning("🛡️ 롱 TP 보류: 익절 가능 물량이 최소 주문 금액(5 USDT) 미만입니다.")
@@ -347,15 +344,13 @@ def run_bot():
             elif action == "SHORT" and amount_usdt > 0:
                 logger.info(f"📉 숏 포지션 진입/추가 (수량: {order_qty} LTC | 지정가: {order_price} USDT)")
                 
-                # 1. 숏 주문 ID 저장
                 order = exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 order_id = order['id']
                 
-                if tp_price > 0 and tp_price < order_price:
+                if tp_price_s > 0 and tp_price_s < order_price: # tp_price_s 로 변경
                     logger.info("👀 숏 지정가 주문 체결 감시 시작... (5초 간격, 최대 10분 대기)")
                     is_filled = False
                     
-                    # 2. 숏 미니 루프 감시
                     for _ in range(120):
                         time.sleep(5)
                         try:
@@ -369,13 +364,12 @@ def run_bot():
                         except Exception as e:
                             pass
                             
-                    # 3. 체결 확인 시 즉시 숏 전용 TP(closePosition) 전송
                     if is_filled:
                         logger.info("✅ 숏 주문 체결 확인! 즉시 안전 방패(TP)를 세웁니다.")
-                        logger.info(f"🎯 숏 포지션 전체 익절(TP) 실시간 설정 완료 (목표가: {tp_price} USDT)")
+                        logger.info(f"🎯 숏 포지션 전체 익절(TP) 실시간 설정 완료 (목표가: {tp_price_s} USDT)") # tp_price_s 로 변경
                         exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
                             'positionSide': 'SHORT', 
-                            'stopPrice': tp_price,
+                            'stopPrice': tp_price_s, # tp_price_s 로 변경
                             'closePosition': True
                         })
                     else:
