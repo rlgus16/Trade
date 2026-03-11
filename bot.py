@@ -118,12 +118,16 @@ def get_market_data():
     df.fillna(0, inplace=True)
     
     # 라이브러리 버전에 따른 이름 차이 에러를 막기 위해 동적으로 컬럼명 탐색
-    rsi_col = next(c for c in df.columns if c.startswith('RSI'))
-    macd_col = next(c for c in df.columns if c.startswith('MACD_'))
-    macds_col = next(c for c in df.columns if c.startswith('MACDs_'))
-    bbu_col = next(c for c in df.columns if c.startswith('BBU'))
-    bbl_col = next(c for c in df.columns if c.startswith('BBL'))
-    sma_col = next(c for c in df.columns if c.startswith('SMA'))
+    rsi_col = next((c for c in df.columns if c.startswith('RSI')), None)
+    macd_col = next((c for c in df.columns if c.startswith('MACD_')), None)
+    macds_col = next((c for c in df.columns if c.startswith('MACDs_')), None)
+    bbu_col = next((c for c in df.columns if c.startswith('BBU')), None)
+    bbl_col = next((c for c in df.columns if c.startswith('BBL')), None)
+    sma_col = next((c for c in df.columns if c.startswith('SMA')), None)
+
+    # 지표 계산에 실패했을 경우의 안전장치 추가
+    if not all([rsi_col, macd_col, macds_col, bbu_col, bbl_col, sma_col]):
+        raise ValueError("기술적 지표 컬럼 생성 실패 (데이터 부족)")
     
     recent_data = []
     for _, row in df.tail(6).iterrows():
@@ -296,7 +300,7 @@ def run_bot():
                 order = exchange.create_order(SYMBOL, 'limit', 'buy', order_qty, order_price, params={'positionSide': 'LONG'})
                 order_id = order['id']
                 
-                if tp_price > current_price:
+                if tp_price > order_price:
                     logger.info("👀 롱 지정가 주문 체결 감시 시작... (5초 간격, 최대 10분 대기)")
                     is_filled = False
                     
@@ -344,7 +348,7 @@ def run_bot():
                 order = exchange.create_order(SYMBOL, 'limit', 'sell', order_qty, order_price, params={'positionSide': 'SHORT'})
                 order_id = order['id']
                 
-                if tp_price > 0 and tp_price < current_price:
+                if tp_price > 0 and tp_price < order_price:
                     logger.info("👀 숏 지정가 주문 체결 감시 시작... (5초 간격, 최대 10분 대기)")
                     is_filled = False
                     
