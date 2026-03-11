@@ -308,9 +308,13 @@ def run_bot():
                                 'stopPrice': tp_price_l
                             })
                         else:
-                            # 자는 동안 돌파했거나, AI가 타점을 낮춘 경우 즉시 시장가 익절!
                             logger.warning(f"🚨 현재 가격({current_price})이 이미 롱 목표가({tp_price_l})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
                             exchange.create_order(SYMBOL, 'MARKET', 'sell', safe_tp_qty, params={'positionSide': 'LONG'})
+                            
+                            # 롱 물량이 청산되었으므로, 과거 기억에 의존한 위험한 신규 진입을 강제 취소합니다.
+                            logger.warning("🛡️ 시장가 익절로 인해 계좌 상태가 급변했습니다! 숏 밸런스 붕괴 방지를 위해 이번 턴 신규 진입을 취소하고 관망(HOLD)합니다.")
+                            action = "HOLD"
+                            amount_usdt = 0.0
 
             if short_contracts > 0 and tp_price_s > 0:
                 if tp_price_s < current_price:
@@ -321,9 +325,13 @@ def run_bot():
                         'closePosition': True
                     })
                 else:
-                    # 숏 역시 이미 수익 구간(목표가 아래)이라면 즉시 시장가 익절!
                     logger.warning(f"🚨 현재 가격({current_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
                     exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
+                    
+                    # 숏 물량이 청산되었으므로, 오작동 방지를 위해 신규 진입을 강제 취소합니다.
+                    logger.warning("🛡️ 시장가 익절로 인해 계좌 상태가 급변했습니다! 안전을 위해 이번 턴 신규 진입을 취소하고 관망(HOLD)합니다.")
+                    action = "HOLD"
+                    amount_usdt = 0.0
 
             # ==========================================
             # 💡 실제 주문 실행부 (TP 전용 전략)
