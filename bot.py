@@ -154,11 +154,11 @@ def get_gemini_signal(free_usdt, long_size, long_price, long_pnl, short_size, sh
     7. Open LONG and SHORT positions to maximize profit.
     8. Exits should rely on take_profit_orders hitting their targets.
     9. Predict and place limit_order for entries.
-    10. Always predict and place take_profit_order for open positions, even if your act is HOLD.
+    10. Always predict and provide BOTH 'tp_l' and 'tp_s' for open positions, even if your act is HOLD.
     
     Respond ONLY in this JSON:
-    {"act": "L"|"S"|"H", "ep": <entry_price>, "tp": <take_profit_price>, "amt": <usdt>, "rsn": "<reasoning>"}
-    (L:LONG, S:SHORT, H:HOLD. Use 'ep' for limit entry price, and 'tp' for take profit price.)
+    {"act": "L"|"S"|"H", "ep": <entry_price>, "tp_l": <long_take_profit>, "tp_s": <short_take_profit>, "amt": <usdt>, "rsn": "<reasoning>"}
+    (L:LONG, S:SHORT, H:HOLD. Use 'ep' for limit entry price. Use 0 if a specific TP is not applicable.)
     """
     
     prompt = f"""
@@ -227,10 +227,11 @@ def run_bot():
             if order_price_raw <= 0:
                 order_price_raw = current_price
                 
-            tp_price_raw = float(signal.get('tp') or 0.0)
+            tp_price_l_raw = float(signal.get('tp_l') or 0.0)
+            tp_price_s_raw = float(signal.get('tp_s') or 0.0)
             reason = signal.get('rsn')
             
-            logger.info(f"🔔 시그널: {action} | 진입 지정가: {order_price_raw} | 목표가(TP): {tp_price_raw} | 요청 금액: {amount_usdt} USDT | 사유: {reason}")
+            logger.info(f"🔔 시그널: {action} | 지정가: {order_price_raw} | 롱TP: {tp_price_l_raw} | 숏TP: {tp_price_s_raw} | 요청금액: {amount_usdt} | 사유: {reason}")
             
             # ==========================================
             # 💡 1차 방어: 신규 진입 시 '전면 거절' 대신 '부분 진입(금액 축소)'으로 유연성 확보
@@ -284,11 +285,13 @@ def run_bot():
                 order_qty = float(order_qty_str)
                 order_price_str = exchange.price_to_precision(SYMBOL, order_price_raw)
                 order_price = float(order_price_str)
-                tp_price = float(exchange.price_to_precision(SYMBOL, tp_price_raw)) if tp_price_raw > 0 else 0.0
             else:
                 order_qty = 0.0
                 order_price = 0.0
-                tp_price = 0.0
+                
+            # TP는 관망(HOLD) 중일 때도 무조건 유지되어야 하므로 if 밖에서 독립적으로 계산합니다!
+            tp_price_l = float(exchange.price_to_precision(SYMBOL, tp_price_l_raw)) if tp_price_l_raw > 0 else 0.0
+            tp_price_s = float(exchange.price_to_precision(SYMBOL, tp_price_s_raw)) if tp_price_s_raw > 0 else 0.0
             
             # ==========================================
             # 💡 실제 주문 실행부 (TP 전용 전략으로 수정)
@@ -381,32 +384,30 @@ def run_bot():
             else:
                 logger.info("⏸️ 관망(HOLD) 또는 조건 불충족 상태 유지.")
                 
-                if tp_price > 0:
-                    if long_contracts > 0 and tp_price > current_price:
-                        # 기존 롱 물량에서도 숏 물량을 뺀 만큼만 갱신
-                        safe_tp_qty_raw = long_contracts - short_contracts
-                        
-                        if safe_tp_qty_raw > 0:
-                            safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
-                            
-                            if safe_tp_qty * tp_price >= 5.0:
-                                logger.info(f"🎯 기존 롱 포지션 부분 익절(TP) 갱신 (목표가: {tp_price} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
-                                exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
-                                    'positionSide': 'LONG', 
-                                    'stopPrice': tp_price
-                                })
-                            else:
-                                logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏을 제외한 익절 가능 물량이 최소 주문 금액(5 USDT) 미만입니다.")
+                # 롱과 숏 포지션이 모두 있을 때 각각 독립적으로 TP 갱신
+                if long_contracts > 0 and tp_price_l > current_price:
+                    safe_tp_qty_raw = long_contracts - short_contracts
+                    
+                    if safe_tp_qty_raw > 0:
+                        safe_tp_qty = float(exchange.amount_to_precision(SYMBOL, safe_tp_qty_raw))
+                        if safe_tp_qty * tp_price_l >= 5.0:
+                            logger.info(f"🎯 기존 롱 포지션 부분 익절(TP) 갱신 (목표가: {tp_price_l} USDT | 수량: {safe_tp_qty} LTC, 숏 보호)")
+                            exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'sell', safe_tp_qty, params={
+                                'positionSide': 'LONG', 
+                                'stopPrice': tp_price_l
+                            })
                         else:
-                            logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏 물량 보호를 위해 현재 롱 포지션을 익절할 수 없습니다.")
+                            logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏을 제외한 익절 가능 물량이 최소 주문 금액(5 USDT) 미만입니다.")
+                    else:
+                        logger.warning("🛡️ 기존 롱 TP 갱신 보류: 숏 물량 보호를 위해 현재 롱 포지션을 익절할 수 없습니다.")
 
-                    if short_contracts > 0 and tp_price < current_price:
-                        logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price} USDT)")
-                        exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
-                            'positionSide': 'SHORT', 
-                            'stopPrice': tp_price,
-                            'closePosition': True
-                        })
+                if short_contracts > 0 and tp_price_s > 0 and tp_price_s < current_price:
+                    logger.info(f"🎯 기존 숏 포지션 익절(TP) 갱신 (목표가: {tp_price_s} USDT)")
+                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
+                        'positionSide': 'SHORT', 
+                        'stopPrice': tp_price_s,
+                        'closePosition': True
+                    })
 
         except Exception as e:
             logger.error(f"🚨 시스템/네트워크 에러 발생: {e}")
