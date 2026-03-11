@@ -200,13 +200,6 @@ def run_bot():
         
         try:
             logger.info("="*50)
-            
-            try:
-                # 이전 루프의 미체결 지정가 및 익절(TP) 주문을 모두 취소하여 초기화합니다.
-                exchange.cancel_all_orders(SYMBOL)
-                logger.info(f"🧹 {SYMBOL} 미체결 주문 및 기존 TP 주문 모두 정리 완료")
-            except Exception as e:
-                logger.warning(f"⚠️ 미체결 주문 취소 중 오류 (무시 가능): {e}")
 
             free_usdt, long_size, long_price, long_pnl, short_size, short_price, short_pnl, long_contracts, short_contracts = get_account_state()
             current_price, recent_data, funding_rate = get_market_data()
@@ -232,6 +225,21 @@ def run_bot():
             reason = signal.get('rsn')
             
             logger.info(f"🔔 시그널: {action} | 지정가: {order_price_raw} | 롱TP: {tp_price_l_raw} | 숏TP: {tp_price_s_raw} | 요청금액: {amount_usdt} | 사유: {reason}")
+            
+            # ==========================================
+            # 선(先) 검증 및 조회, 후(後) 취소 로직
+            # API 에러나 AI 환각으로 인해 방패가 영구 소실되는 것을 막기 위해,
+            # 모든 분석이 "정상적으로" 끝난 이 시점에만 낡은 방패를 치웁니다.
+            # ==========================================
+            if (long_contracts > 0 and tp_price_l_raw <= 0) or (short_contracts > 0 and tp_price_s_raw <= 0) or \
+               (action == "LONG" and tp_price_l_raw <= 0) or (action == "SHORT" and tp_price_s_raw <= 0):
+                raise ValueError("AI가 유효한 익절가(TP)를 반환하지 않았습니다. 기존 방어막을 유지하며 재시도합니다.")
+                
+            try:
+                exchange.cancel_all_orders(SYMBOL)
+                logger.info(f"🧹 {SYMBOL} 미체결 주문 및 기존 TP 주문 모두 정리 완료 (분석 성공)")
+            except Exception as e:
+                logger.warning(f"⚠️ 주문 취소 오류 (무시 가능): {e}")
             
             # ==========================================
             # 💡 1차 방어: 신규 진입 시 '전면 거절' 대신 '부분 진입(금액 축소)'으로 유연성 확보
@@ -364,14 +372,15 @@ def run_bot():
                             pass 
                             
                     if is_filled:
-                        logger.info("✅ 롱 주문 체결 확인! 기존 방어막을 해제하고 최신 수량으로 TP를 재구축합니다.")
-                        exchange.cancel_all_orders(SYMBOL) # 선제 구축했던 TP 지우기
+                        logger.info("✅ 롱 주문 체결 확인! 최신 계좌 상태를 스캔합니다...")
                         
+                        # API 에러 시 방어막 증발을 막기 위해 조회부터 먼저 실행
                         _, _, _, _, _, _, _, new_long_contracts, new_short_contracts = get_account_state()
-                        
-                        # 10분 사이 가격이 급변했을 수 있으므로 최신 가격 실시간 조회
                         latest_ticker = exchange.fetch_ticker(SYMBOL)
                         latest_price = latest_ticker['last']
+                        
+                        exchange.cancel_all_orders(SYMBOL) # 조회가 성공하면 안전하게 지우기
+                        logger.info("🧹 기존 방어막 해제 및 최신 수량으로 TP 재구축 시작")
                         
                         # 1. 늘어난 수량으로 롱 TP 재설정
                         safe_tp_qty_raw = new_long_contracts - new_short_contracts
@@ -431,14 +440,15 @@ def run_bot():
                             pass
                             
                     if is_filled:
-                        logger.info("✅ 숏 주문 체결 확인! 기존 방어막을 해제하고 최신 수량으로 TP를 재구축합니다.")
-                        exchange.cancel_all_orders(SYMBOL) # 선제 구축했던 TP 지우기
+                        logger.info("✅ 숏 주문 체결 확인! 최신 계좌 상태를 스캔합니다...")
                         
+                        # API 에러 시 방어막 증발을 막기 위해 조회부터 먼저 실행
                         _, _, _, _, _, _, _, new_long_contracts, new_short_contracts = get_account_state()
-                        
-                        # 최신 가격 실시간 조회
                         latest_ticker = exchange.fetch_ticker(SYMBOL)
                         latest_price = latest_ticker['last']
+                        
+                        exchange.cancel_all_orders(SYMBOL) # 조회가 성공하면 안전하게 지우기
+                        logger.info("🧹 기존 방어막 해제 및 최신 수량으로 TP 재구축 시작")
                         
                         # 1. 숏 TP 전체 재설정
                         if new_short_contracts > 0 and tp_price_s > 0:
