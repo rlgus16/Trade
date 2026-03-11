@@ -247,13 +247,17 @@ def run_bot():
                         action = "HOLD"; amount_usdt = 0.0
                         
             elif action == "SHORT" and amount_usdt > 0:
-                if short_size + amount_usdt > long_size:
-                    available_space = long_size - short_size
-                    if available_space >= 5.0:
-                        logger.info(f"🔄 숏 한도 초과 감지: 숏은 롱 규모를 넘을 수 없어 남은 한도({available_space:.2f} USDT)로 축소 진입합니다.")
-                        amount_usdt = available_space
+                # 금액(USDT)이 아닌 수량(Contracts) 기준으로 숏 한도를 계산해야 가격 하락 시 Naked Short가 발생하지 않습니다!
+                requested_qty = amount_usdt / order_price_raw if order_price_raw > 0 else 0
+                available_qty = long_contracts - short_contracts
+                
+                if requested_qty > available_qty:
+                    available_usdt = available_qty * order_price_raw
+                    if available_usdt >= 5.0:
+                        logger.info(f"🔄 숏 한도 초과 감지: 숏 수량은 롱 수량을 넘을 수 없어 남은 한도({available_usdt:.2f} USDT / {available_qty} LTC)로 축소 진입합니다.")
+                        amount_usdt = available_usdt
                     else:
-                        logger.warning("⛔ 숏 포지션이 롱 규모와 동일하여 추가 진입 불가.")
+                        logger.warning("⛔ 숏 포지션(수량)이 롱 포지션과 동일하여 추가 진입 불가.")
                         action = "HOLD"; amount_usdt = 0.0
 
             # 🛡️ 2차 방어: 가용 증거금 부족 시에도 전면 거절 대신 '가용 한도 내 최대 진입'
