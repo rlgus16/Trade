@@ -344,23 +344,6 @@ def run_bot():
                             action = "HOLD"
                             amount_usdt = 0.0
 
-            if short_contracts > 0 and tp_price_s > 0:
-                # 낡은 current_price 대신 방금 조회한 live_price 와 비교합니다!
-                if tp_price_s < live_price:
-                    logger.info(f"🛡️ 기존 숏 포지션 사전 익절(TP) 복구 완료 (목표가: {tp_price_s} USDT)")
-                    exchange.create_order(SYMBOL, 'TAKE_PROFIT_MARKET', 'buy', None, params={
-                        'positionSide': 'SHORT', 
-                        'stopPrice': tp_price_s,
-                        'closePosition': True
-                    })
-                else:
-                    logger.warning(f"🚨 현재 가격({live_price})이 이미 숏 목표가({tp_price_s})를 돌파했습니다! 사전 방어막 대신 즉시 시장가로 익절합니다.")
-                    exchange.create_order(SYMBOL, 'MARKET', 'buy', None, params={'positionSide': 'SHORT', 'closePosition': True})
-                    
-                    logger.warning("🛡️ 시장가 익절로 인해 계좌 상태가 급변했습니다! 안전을 위해 이번 턴 신규 진입을 취소하고 관망(HOLD)합니다.")
-                    action = "HOLD"
-                    amount_usdt = 0.0
-
             # ==========================================
             # 💡 실제 주문 실행부 (TP 전용 전략)
             # ==========================================
